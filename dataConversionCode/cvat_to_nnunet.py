@@ -17,6 +17,9 @@ import cv2
 
 # ==================== 設定項目 ====================
 
+# eT1W_SE_tra, T2 TIME sue1 rfa180, eT1W_SE_cor, eT1W_SE_sag, T2W_SPIR_cor
+SERIES_NAME = "eT1W_SE_tra"
+
 # タスクID (001から999の間)
 TASK_ID = 102
 TASK_NAME = "EyeMuscleSegmentation"
@@ -24,7 +27,7 @@ TASK_FOLDER_NAME = f"Dataset{TASK_ID:03d}_{TASK_NAME}"
 
 # 入力データのパス
 CVAT_JSON_DIR = "Data/cvat_output"  # CVATから出力したJSONファイルがある場所
-TIFF_IMAGE_DIR = "Data/Tiffs"  # 対応するTIFF画像がある場所
+TIFF_IMAGE_DIR = f"Data/Tiffs/{SERIES_NAME}"  # 対応するTIFF画像がある場所
 
 # nnU-Net用の出力先
 NNUNET_RAW_DATA_DIR = os.environ.get("nnUNet_raw")
@@ -45,9 +48,6 @@ LABEL_MAP = {
     "lr": 5,
     "io": 6,
 }
-
-# Seriesの種類（必要に応じて変更）
-SERIES_NAME = "eT1W_SE_tra"
 
 # ==================== 関数定義 ====================
 

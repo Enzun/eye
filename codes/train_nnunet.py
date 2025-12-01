@@ -56,7 +56,6 @@ def run_training(task_id: int, fold: int = 0, configuration: str = "2d",
                  trainer: str = "nnUNetTrainer", epochs: int = 100):
     """nnU-Netトレーニングを実行"""
     print(f"\n=== Step 2: モデルトレーニング (Fold {fold}) ===")
-    print(type(trainer))
     dataset_name = f"Dataset{task_id:03d}_EyeMuscleSegmentation"
     
     # トレーニングコマンド構築
