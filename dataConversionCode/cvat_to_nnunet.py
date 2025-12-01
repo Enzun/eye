@@ -18,7 +18,7 @@ import cv2
 # ==================== 設定項目 ====================
 
 # eT1W_SE_tra, T2 TIME sue1 rfa180, eT1W_SE_cor, eT1W_SE_sag, T2W_SPIR_cor
-SERIES_NAME = "eT1W_SE_tra"
+SERIES_NAME = "eT1W_SE_cor"
 
 # タスクID (001から999の間)
 TASK_ID = 102
@@ -131,6 +131,10 @@ def create_3d_nifti_from_patient_data(patient_files, tiff_dir, label_map):
     """
     image_slices = []
     mask_slices = []
+    slice_info = []  # サイズ情報を記録
+    expected_shape = None
+    size_mismatch_found = False
+    resized_count = 0  # リサイズしたマスクの数
     
     for file_info in patient_files:
         json_path = file_info['json_path']
@@ -162,15 +166,56 @@ def create_3d_nifti_from_patient_data(patient_files, tiff_dir, label_map):
         # マスクを生成
         mask_array = json_to_mask(json_path, tiff_path, label_map)
         
+        # マスクサイズが画像サイズと異なる場合はリサイズ
+        if mask_array.shape != img_array.shape:
+            print(f"    ⚙️  リサイズ: {base_name} マスク {mask_array.shape} → {img_array.shape}")
+            # 最近傍補間でリサイズ（ラベル値を保持）
+            mask_array = cv2.resize(mask_array, (img_array.shape[1], img_array.shape[0]), 
+                                   interpolation=cv2.INTER_NEAREST)
+            resized_count += 1
+        
+        # サイズチェック
+        current_shape = img_array.shape
+        if expected_shape is None:
+            expected_shape = current_shape
+        
+        # サイズ情報を記録
+        slice_info.append({
+            'filename': base_name,
+            'image_shape': img_array.shape,
+            'mask_shape': mask_array.shape,
+            'matches_expected': (img_array.shape == expected_shape and mask_array.shape == expected_shape)
+        })
+        
+        if img_array.shape != expected_shape or mask_array.shape != expected_shape:
+            size_mismatch_found = True
+        
         image_slices.append(img_array)
         mask_slices.append(mask_array)
     
     if not image_slices:
         return None, None
     
+    # リサイズ情報を表示
+    if resized_count > 0:
+        print(f"  ℹ️  {resized_count}個のマスクをリサイズしました")
+    
+    # サイズ不一致がある場合、詳細情報を表示
+    if size_mismatch_found:
+        print(f"\n  ⚠️  サイズ不一致を検出しました:")
+        print(f"  期待されるサイズ: {expected_shape}")
+        print(f"  スライス詳細:")
+        for info in slice_info:
+            status = "✓" if info['matches_expected'] else "✗"
+            print(f"    {status} {info['filename']}: 画像={info['image_shape']}, マスク={info['mask_shape']}")
+    
     # 3D配列にスタック
-    image_3d = np.stack(image_slices, axis=0)  # (Z, H, W)
-    mask_3d = np.stack(mask_slices, axis=0)    # (Z, H, W)
+    try:
+        image_3d = np.stack(image_slices, axis=0)  # (Z, H, W)
+        mask_3d = np.stack(mask_slices, axis=0)    # (Z, H, W)
+    except ValueError as e:
+        print(f"\n  ❌ エラー: スライスのスタックに失敗しました")
+        raise
     
     # SimpleITKイメージに変換
     sitk_image = sitk.GetImageFromArray(image_3d)
@@ -198,6 +243,7 @@ def create_nnunet_dataset(patient_groups, tiff_dir, output_dir, label_map):
     print(f"\nnnU-Netデータセットを作成中: {output_dir}")
     
     case_list = []
+    failed_cases = []  # エラーが発生した患者を記録
     
     # 患者ごとに処理
     for idx, (patient_key, patient_files) in enumerate(patient_groups.items()):
@@ -206,27 +252,67 @@ def create_nnunet_dataset(patient_groups, tiff_dir, output_dir, label_map):
         
         print(f"\n[{idx+1}/{len(patient_groups)}] 処理中: {case_name} ({len(patient_files)}スライス)")
         
-        # 3D NIfTIを作成
-        sitk_image, sitk_mask = create_3d_nifti_from_patient_data(
-            patient_files, tiff_dir, label_map
-        )
-        
-        if sitk_image is None:
-            print(f"  スキップ: データが不足しています")
-            continue
-        
-        # ファイル名を生成（nnU-Net形式）
-        # 画像: {case_name}_0000.nii.gz （_0000はモダリティを示す）
-        # ラベル: {case_name}.nii.gz
-        image_filename = os.path.join(imagesTr_dir, f"{case_name}_0000.nii.gz")
-        label_filename = os.path.join(labelsTr_dir, f"{case_name}.nii.gz")
-        
-        # NIfTI形式で保存
-        sitk.WriteImage(sitk_image, image_filename)
-        sitk.WriteImage(sitk_mask, label_filename)
-        
-        case_list.append(case_name)
-        print(f"  保存完了: {case_name}")
+        try:
+            # 3D NIfTIを作成
+            sitk_image, sitk_mask = create_3d_nifti_from_patient_data(
+                patient_files, tiff_dir, label_map
+            )
+            
+            if sitk_image is None:
+                print(f"  スキップ: データが不足しています")
+                failed_cases.append({
+                    'case': case_name,
+                    'reason': 'データ不足',
+                    'details': 'TIFF画像が見つからない'
+                })
+                continue
+            
+            # ファイル名を生成（nnU-Net形式）
+            # 画像: {case_name}_0000.nii.gz （_0000はモダリティを示す）
+            # ラベル: {case_name}.nii.gz
+            image_filename = os.path.join(imagesTr_dir, f"{case_name}_0000.nii.gz")
+            label_filename = os.path.join(labelsTr_dir, f"{case_name}.nii.gz")
+            
+            # NIfTI形式で保存
+            sitk.WriteImage(sitk_image, image_filename)
+            sitk.WriteImage(sitk_mask, label_filename)
+            
+            case_list.append(case_name)
+            print(f"  ✓ 保存完了: {case_name}")
+            
+        except ValueError as e:
+            # サイズ不一致などのエラー
+            print(f"  ✗ エラー: {case_name} の処理に失敗しました")
+            print(f"     理由: {str(e)}")
+            failed_cases.append({
+                'case': case_name,
+                'reason': 'サイズ不一致',
+                'details': str(e)
+            })
+            
+        except Exception as e:
+            # その他のエラー
+            print(f"  ✗ エラー: {case_name} の処理に失敗しました")
+            print(f"     理由: {str(e)}")
+            failed_cases.append({
+                'case': case_name,
+                'reason': '予期しないエラー',
+                'details': str(e)
+            })
+    
+    # サマリーを表示
+    print("\n" + "=" * 60)
+    print("処理サマリー")
+    print("=" * 60)
+    print(f"✓ 成功: {len(case_list)}件")
+    print(f"✗ 失敗: {len(failed_cases)}件")
+    
+    if failed_cases:
+        print("\n失敗した患者の詳細:")
+        for failed in failed_cases:
+            print(f"  • {failed['case']}: {failed['reason']}")
+            if 'details' in failed and failed['details']:
+                print(f"    └─ {failed['details']}")
     
     return case_list
 
@@ -234,9 +320,9 @@ def create_dataset_json(output_dir, label_map, num_training):
     """
     nnU-Net用のdataset.jsonを作成
     """
-    # ラベル辞書を作成（文字列キーが必要）
-    labels_dict = {str(val): key for key, val in label_map.items()}
-    labels_dict["0"] = "background"
+    # ラベル辞書を作成（nnU-Net v2形式: ラベル名: ラベル番号）
+    labels_dict = {"background": 0}
+    labels_dict.update({key: val for key, val in label_map.items()})
     
     dataset_json = {
         "channel_names": {

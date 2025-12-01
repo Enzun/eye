@@ -161,8 +161,8 @@ def run_inference(task_id: int, input_folder: str, output_folder: str,
 
 def main():
     parser = argparse.ArgumentParser(description='nnU-Net v2 トレーニング実行')
-    parser.add_argument('--task_id', type=int, default=501,
-                       help='タスクID (デフォルト: 501)')
+    parser.add_argument('--task_id', type=int, default=102,
+                       help='タスクID (デフォルト: 102)')
     parser.add_argument('--mode', choices=['full', 'plan', 'train', 'predict'], 
                        default='full',
                        help='実行モード: full=全工程, plan=プランニングのみ, train=学習のみ, predict=推論のみ')
@@ -175,7 +175,7 @@ def main():
     parser.add_argument('--input_folder', type=str,
                        help='推論時の入力フォルダ')
     parser.add_argument('--output_folder', type=str, 
-                       default='C:/Users/mitae/workspace/imageProcessing/nnUnet/predictions',
+                       default='C:/Users/mitae/workspace/imageP/nnUNet_predictions',
                        help='推論時の出力フォルダ')
     
     args = parser.parse_args()
