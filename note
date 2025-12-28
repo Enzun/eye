@@ -48,3 +48,6 @@ python codes/train_nnunet.py --mode predict --task_id 102 \
 # -> Predict Phase
 # predict.py で試してみて良さげだったらbestを取り出してノートパソコンへ入れる。
 
+git add .
+git commit -m ""
+git push

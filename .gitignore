@@ -4,4 +4,4 @@ runs/
 nnUNet_raw/
 nnUNet_preprocessed/
 nnUNet_results/
-predictions/
+nnUNet_predictions/
