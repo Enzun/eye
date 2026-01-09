@@ -41,18 +41,12 @@ class AnnotationCanvas(QLabel):
         
         # ラベル色定義（BGR→RGB変換）
         self.label_colors = {
-            "l_so": (255, 0, 0),    # 赤
-            "r_so": (255, 0, 0),    
-            "l_io": (0, 255, 0),    # 緑
-            "r_io": (0, 255, 0),    
-            "l_sr": (0, 0, 255),    # 青
-            "r_sr": (0, 0, 255),    
-            "l_ir": (255, 255, 0),  # 黄
-            "r_ir": (255, 255, 0),  
-            "l_lr": (255, 0, 255),  # マゼンタ
-            "r_lr": (255, 0, 255),  
-            "l_mr": (0, 255, 255),  # シアン
-            "r_mr": (0, 255, 255),
+            "so": (255, 0, 0),    # 赤
+            "io": (0, 255, 0),    # 緑
+            "sr": (0, 0, 255),    # 青
+            "ir": (255, 255, 0),  # 黄
+            "lr": (255, 0, 255),  # マゼンタ
+            "mr": (0, 255, 255),  # シアン
         }
         
         self.setMouseTracking(True)
@@ -242,13 +236,22 @@ class AnnotationCanvas(QLabel):
         if self.original_image is None or self.image_path is None:
             return None
         
+        # shapesにflags, group_idを追加
+        shapes_with_metadata = []
+        for annotation in self.annotations:
+            shape = annotation.copy()
+            shape['group_id'] = None
+            shape['flags'] = {}
+            shapes_with_metadata.append(shape)
+        
         data = {
-            "version": "1.1.0",
-            "imageData": None,
+            "version": "4.5.9",
+            "flags": {},
+            "shapes": shapes_with_metadata,
             "imagePath": Path(self.image_path).name,
+            "imageData": None,
             "imageHeight": self.original_image.shape[0],
-            "imageWidth": self.original_image.shape[1],
-            "shapes": self.annotations.copy()
+            "imageWidth": self.original_image.shape[1]
         }
         
         return data
@@ -271,7 +274,6 @@ class AnnotationTool(QMainWindow):
         # 筋肉ラベル定義
         self.muscle_labels = ["ir", "mr", "sr", "so", "lr", "io"]
         self.current_muscle = "sr"  # デフォルト
-        self.current_side = "l"     # デフォルト
         
         # 作業ディレクトリ
         self.work_dir = None
@@ -351,24 +353,6 @@ class AnnotationTool(QMainWindow):
         label_group = QGroupBox("ラベル選択")
         label_layout = QVBoxLayout()
         
-        # 左右選択
-        side_layout = QHBoxLayout()
-        side_layout.addWidget(QLabel("左右:"))
-        
-        self.side_group = QButtonGroup()
-        self.left_radio = QRadioButton("左 (l_)")
-        self.left_radio.setChecked(True)
-        self.left_radio.toggled.connect(self.on_side_changed)
-        self.side_group.addButton(self.left_radio)
-        side_layout.addWidget(self.left_radio)
-        
-        self.right_radio = QRadioButton("右 (r_)")
-        self.right_radio.toggled.connect(self.on_side_changed)
-        self.side_group.addButton(self.right_radio)
-        side_layout.addWidget(self.right_radio)
-        
-        label_layout.addLayout(side_layout)
-        
         # 筋肉選択
         label_layout.addWidget(QLabel("筋肉:"))
         self.muscle_group = QButtonGroup()
@@ -394,7 +378,6 @@ class AnnotationTool(QMainWindow):
         
         # 現在のラベル表示
         self.current_label_display = QLabel()
-        self.update_label_display()
         self.current_label_display.setStyleSheet(
             "font-size: 14px; font-weight: bold; padding: 10px; "
             "background-color: #444; border-radius: 5px;"
@@ -409,8 +392,9 @@ class AnnotationTool(QMainWindow):
         draw_layout = QVBoxLayout()
         
         help_text = QLabel(
-            "左クリック: 点を追加\n"
-            "右クリック: ポリゴン完成\n"
+            "1. 筋肉を選択\n"
+            "2. 左クリック: 点を追加\n"
+            "3. 右クリック: ポリゴン完成\n"
             "(最低3点必要)"
         )
         help_text.setStyleSheet("color: #aaa; font-size: 11px;")
@@ -536,12 +520,6 @@ class AnnotationTool(QMainWindow):
             self.current_file_index += 1
             self.load_current_file()
     
-    def on_side_changed(self):
-        """左右選択が変更された"""
-        self.current_side = "l" if self.left_radio.isChecked() else "r"
-        if hasattr(self, 'current_label_display'):
-            self.update_label_display()
-    
     def on_muscle_changed(self, checked):
         """筋肉選択が変更された"""
         if checked:
@@ -557,7 +535,7 @@ class AnnotationTool(QMainWindow):
     
     def get_current_label(self):
         """現在選択されているラベルを取得"""
-        return f"{self.current_side}_{self.current_muscle}"
+        return self.current_muscle
     
     def update_annotation_list(self):
         """アノテーション一覧を更新"""
