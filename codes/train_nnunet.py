@@ -25,11 +25,13 @@ def check_environment():
         print("\n❌ 以下の環境変数が設定されていません:")
         for var in missing:
             print(f"  - {var}")
-        print("\nsetup_nnunet.sh を実行するか、以下のコマンドで設定してください:")
-        print('export nnUNet_raw="/home/claude/nnunet_data/nnUNet_raw"')
-        print('export nnUNet_preprocessed="/home/claude/nnunet_data/nnUNet_preprocessed"')
-        print('export nnUNet_results="/home/claude/nnunet_data/nnUNet_results"')
+
+        print("\nsetup_nnunet.sh を実行するか、プロジェクトルートの .env ファイルを設定してください:")
+        print('nnUNet_raw="C:/Users/mitae/workspace/imageP/nnUNet_raw"')
+        print('nnUNet_preprocessed="C:/Users/mitae/workspace/imageP/nnUNet_preprocessed"')
+        print('nnUNet_results="C:/Users/mitae/workspace/imageP/nnUNet_results"')
         return False
+
     
     return True
 

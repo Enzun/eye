@@ -83,16 +83,12 @@ def check_environment_variables():
             print(f"  説明: {description}")
             all_ok = False
     
+
     if not all_ok:
         print("\n環境変数の設定方法:")
-        print("  Linux/Mac:")
-        print('    export nnUNet_raw="/path/to/nnUNet_raw"')
-        print('    export nnUNet_preprocessed="/path/to/nnUNet_preprocessed"')
-        print('    export nnUNet_results="/path/to/nnUNet_results"')
-        print("\n  Windows:")
-        print('    set nnUNet_raw=C:\\path\\to\\nnUNet_raw')
-        print('    set nnUNet_preprocessed=C:\\path\\to\\nnUNet_preprocessed')
-        print('    set nnUNet_results=C:\\path\\to\\nnUNet_results')
+        print("  プロジェクトルートの .env ファイルを確認・編集してください。")
+        print("  setup_nnunet.sh を実行することでも生成できます。")
+
     
     return all_ok
 

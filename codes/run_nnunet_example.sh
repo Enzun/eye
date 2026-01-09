@@ -13,20 +13,31 @@ echo "4. モデルの学習"
 echo ""
 
 # ========================================
+
 # 1. 環境変数の設定
 # ========================================
 echo "Step 1: 環境変数を設定..."
 
-export nnUNet_raw="C:/Users/mitae/workspace/imageP/nnUNet_raw"
-export nnUNet_preprocessed="C:/Users/mitae/workspace/imageP/nnUNet_preprocessed"
-export nnUNet_results="C:/Users/mitae/workspace/imageP/nnUNet_results"
+# .envファイルのパス
+if [ -f ".env" ]; then
+    ENV_FILE=".env"
+elif [ -f "../.env" ]; then
+    ENV_FILE="../.env"
+else
+    echo "エラー: .envファイルが見つかりません。setup_nnunet.shを実行してください。"
+    exit 1
+fi
+
+# .envを読み込んでエクスポート
+export $(grep -v '^#' $ENV_FILE | xargs)
 
 # ディレクトリ作成
-mkdir -p $nnUNet_raw
-mkdir -p $nnUNet_preprocessed
-mkdir -p $nnUNet_results
+mkdir -p "$nnUNet_raw"
+mkdir -p "$nnUNet_preprocessed"
+mkdir -p "$nnUNet_results"
 
-echo "  ✓ 環境変数設定完了"
+echo "  ✓ 環境変数設定完了 (from $ENV_FILE)"
+
 
 # ========================================
 # 2. 必要なパッケージのインストール
