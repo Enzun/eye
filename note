@@ -46,7 +46,7 @@ python codes/train_nnunet.py --mode predict --task_id 102 \
 # -> Predict Phase
 eyeMuscleGUI.py で予測
 
-つなげる
+ここはつなげる
 
 annnotation_tool.py でアノテーション
 Tiff画像
@@ -54,5 +54,5 @@ Tiff画像
 =========================================
 
 git add .
-git commit -m ""
+git commit -m "add"
 git push

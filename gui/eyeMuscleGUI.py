@@ -556,8 +556,38 @@ class EyeMuscleGUI(QMainWindow):
             self.volume_table.setItem(i, 1, QTableWidgetItem(f"{volume:.2f}"))
 
 
+
+def load_env_file():
+    """Project rootの.envファイルを読み込む"""
+    try:
+        # このスクリプトは gui/ フォルダにある想定
+        # プロジェクトルートは一つ上の階層
+        env_path = Path(__file__).resolve().parent.parent / '.env'
+        
+        if env_path.exists():
+            print(f"Loading environment from: {env_path}")
+            with open(env_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        # クォート除去
+                        value = value.strip().strip('"').strip("'")
+                        os.environ[key.strip()] = value
+            return True
+    except Exception as e:
+        print(f"Warning: Failed to load .env file: {e}")
+    return False
+
+
 def main():
+    # 環境変数をロード
+    load_env_file()
+    
     app = QApplication(sys.argv)
+
     
     # スタイル設定
     app.setStyle("Fusion")
