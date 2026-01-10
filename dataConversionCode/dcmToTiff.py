@@ -13,30 +13,33 @@ import glob
 # eT1W_SE_tra, T2 TIME sue1 rfa180, eT1W_SE_cor, eT1W_SE_sag, T2W_SPIR_cor
 series = "eT1W_SE_cor"
 
-sep = False
+date = "2025_11_03_2"
+ex_dir = 'C:/imageProcessing/data_sort/' + date + "/"
+
+sepl = False
 distributer_num = 10 #何人に分けるか
 f_num = 15 #一人何フォルダか
-output= 'Data/MRI_IMGs/'+series+"/1/" #出力フォルダ
+output= 'data_Tiff/'+series+"/1/" #出力フォルダ
 
 p = re.compile(".+({})".format(series))
 exp = re.compile(r"EX\d+")
 sep = re.compile(r"SE\d")
 cnt=0
 
-with open("Data/EXFILES/data.txt", "r", encoding="utf-8") as f:
+with open(ex_dir + "/data.txt", "r", encoding="utf-8") as f:
     lines = f.readlines()
     target_lines = [line for line in lines if p.match(line) ]
     print(len(target_lines))
 
     # Tiffファイルを保存するための出力ディレクトリ
-    output_dir = 'Data/Tiffs/{}/'.format(series)
+    output_dir = 'data_Tiff/{}/'.format(series)
     os.makedirs(output_dir, exist_ok=True)
 
     for i in range(len(target_lines)):
         ex = re.search(exp,target_lines[i]).group()
         se = re.search(sep,target_lines[i]).group()
         # DICOMファイルが保存されているディレクトリ
-        dicom_dir = 'Data/EXFILES/'+ex+"/"+se+"/"
+        dicom_dir = ex_dir + ex_id + ex_date + ex+"/"+se+"/"
 
         # ディレクトリ内のすべてのファイルを取得し、DICOMファイルのみをリストに追加
         dicom_files = [f for f in os.listdir(dicom_dir) if f.startswith('IMG')]
@@ -82,7 +85,7 @@ with open("Data/EXFILES/data.txt", "r", encoding="utf-8") as f:
     #分割
     if distributer_num*f_num>len(target_lines):
         print("数が合わないよ")
-    elif sep:
+    elif sepl:
         cnt=0
         dir="Data/Tiffs/"+series+"/"
         l = []
