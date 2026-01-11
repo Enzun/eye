@@ -52,6 +52,9 @@ annnotation_tool.py でアノテーション
 Tiff画像
 
 =========================================
+git clone https://github.com/Enzun/eye
+
+git init
 
 git add .
 git commit -m "add"
