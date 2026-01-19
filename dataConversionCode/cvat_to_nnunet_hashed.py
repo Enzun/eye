@@ -1,6 +1,6 @@
-# dataConversionCode/cvat_to_nnunet.py
+# dataConversionCode/cvat_to_nnunet_hashed.py
 """
-CVATアノテーションをnnU-Net形式に変換するスクリプト
+CVATアノテーションをnnU-Net形式に変換するスクリプト (ハッシュ化ファイル名対応版)
 患者ごとにTIFFファイルをまとめて3D NIfTIに変換します
 """
 
@@ -14,7 +14,6 @@ import numpy as np
 from PIL import Image
 import SimpleITK as sitk
 import cv2
-import xml.etree.ElementTree as ET
 
 # プロジェクトルートを取得
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,12 +24,12 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERIES_NAME = "eT1W_SE_cor"
 
 # タスクID (001から999の間)
-TASK_ID = 119
+TASK_ID = 103
 TASK_NAME = "EyeMuscleSegmentation"
 TASK_FOLDER_NAME = f"Dataset{TASK_ID:03d}_{TASK_NAME}"
 
 # 入力データのパス
-CVAT_XML_DIR = os.path.join(PROJECT_ROOT, "annotated_data", "cvat_output", SERIES_NAME, "default")  # CVATから出力したXMLファイルがある場所
+CVAT_JSON_DIR = os.path.join(PROJECT_ROOT, "annotated_data", "cvat_output", SERIES_NAME, "default")  # CVATから出力したJSONファイルがある場所
 TIFF_IMAGE_DIR = os.path.join(PROJECT_ROOT, "data_Tiff", SERIES_NAME)  # 対応するTIFF画像がある場所
 
 # nnU-Net用の出力先
@@ -58,38 +57,38 @@ LABEL_MAP = {
 def extract_patient_info(filename):
     """
     ファイル名から患者情報を抽出
-    ファイル名から患者情報を抽出
-    例: 10024120240508EX7SE3IMG05.tiff → (EX7, SE3, 5)
+    例: a1b2c3d4e5f6EX7SE3IMG05.tiff → (a1b2c3d4e5f6, EX7, SE3, 5)
     """
-    # ID...DATE...EX...SE...IMG... の形式に対応
-    # 以前の EX...SE...IMG... も一応サポート
-    match = re.search(r'(EX\d+)(SE\d+)IMG(\d+)', filename)
+    # {Hash}{EX}{SE}IMG{Num} の形式
+    # Hashは12文字の英数字
+    match = re.search(r'([a-f0-9]{12})(EX\d+)(SE\d+)IMG(\d+)', filename)
     if match:
-        ex_num = match.group(1)
-        se_num = match.group(2)
-        img_num = int(match.group(3))
-        return ex_num, se_num, img_num
-    return None, None, None
+        hash_id = match.group(1)
+        ex_num = match.group(2)
+        se_num = match.group(3)
+        img_num = int(match.group(4))
+        return hash_id, ex_num, se_num, img_num
+    return None, None, None, None
 
-def group_files_by_patient(xml_dir):
+def group_files_by_patient(json_dir):
     """
-    XMLファイルを患者ごとにグループ化
+    JSONファイルを患者ごとにグループ化
     返り値: {(EX番号, SE番号): [ファイルパスのリスト]}
     """
     patient_groups = defaultdict(list)
     
-    xml_files = glob.glob(os.path.join(xml_dir, "**", "*.xml"), recursive=True)
+    json_files = glob.glob(os.path.join(json_dir, "*.json"))
     
-    for xml_path in xml_files:
-        filename = os.path.basename(xml_path)
-        # XMLファイル名から .xml を除いた部分を画像名として解析
-        base_name = os.path.splitext(filename)[0]
-        ex_num, se_num, img_num = extract_patient_info(filename)
+    for json_path in json_files:
+        filename = os.path.basename(json_path)
+        hash_id, ex_num, se_num, img_num = extract_patient_info(filename)
         
-        if ex_num and se_num:
-            patient_key = (ex_num, se_num)
+        if hash_id and ex_num and se_num:
+            # 患者ごとのキー: (Hash, EX, SE)
+            # 同じHash+EX+SEなら同じシリーズ（NIfTIファイル）になる
+            patient_key = (hash_id, ex_num, se_num)
             patient_groups[patient_key].append({
-                'xml_path': xml_path,
+                'json_path': json_path,
                 'img_num': img_num,
                 'filename': filename
             })
@@ -100,46 +99,38 @@ def group_files_by_patient(xml_dir):
     
     return patient_groups
 
-def xml_to_mask(xml_path, tiff_path, label_map):
+def json_to_mask(json_path, tiff_path, label_map):
     """
-    CVAT XMLファイルとTIFF画像からマスク画像を生成
+    LabelMe JSONファイルとTIFF画像からマスク画像を生成
     """
-    # 画像サイズをTIFFから取得 (XMLにサイズ情報がない場合があるため)
-    with Image.open(tiff_path) as img:
-        width, height = img.size
-
+    # JSONファイルを読み込み
+    with open(json_path, 'r') as f:
+        data = json.load(f)
+    
+    # 画像サイズを取得
+    height = data['imageHeight']
+    width = data['imageWidth']
+    
     # マスク画像を初期化（背景=0）
     mask = np.zeros((height, width), dtype=np.uint8)
     
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
-
-    # 各オブジェクト（ラベル）を処理
-    for obj in root.findall('object'):
-        name = obj.find('name').text
+    # 各シェイプをマスクに描画
+    for shape in data['shapes']:
+        label_name = shape['label']
         
         # l_やr_プレフィックスを削除
-        if name.startswith('l_') or name.startswith('r_'):
-            name = name[2:]
-            
-        if name not in label_map:
-            continue
-            
-        label_value = label_map[name]
+        if label_name.startswith('l_') or label_name.startswith('r_'):
+            label_name = label_name[2:]
         
-        polygon = obj.find('polygon')
-        if polygon is not None:
-            points = []
-            for pt in polygon.findall('pt'):
-                x = float(pt.find('x').text)
-                y = float(pt.find('y').text)
-                points.append([x, y])
-            
-            if points:
-                points = np.array(points, dtype=np.int32)
-                # ポリゴンを塗りつぶし
-                cv2.fillPoly(mask, [points], label_value)
-
+        if label_name not in label_map:
+            continue
+        
+        label_value = label_map[label_name]
+        points = np.array(shape['points'], dtype=np.int32)
+        
+        # ポリゴンを塗りつぶし
+        cv2.fillPoly(mask, [points], label_value)
+    
     return mask
 
 def create_3d_nifti_from_patient_data(patient_files, tiff_dir, label_map):
@@ -154,8 +145,8 @@ def create_3d_nifti_from_patient_data(patient_files, tiff_dir, label_map):
     resized_count = 0  # リサイズしたマスクの数
     
     for file_info in patient_files:
-        xml_path = file_info['xml_path']
-        base_name = file_info['filename'].replace('.xml', '')
+        json_path = file_info['json_path']
+        base_name = file_info['filename'].replace('.json', '')
         
         # 対応するTIFF画像を検索
         tiff_path = os.path.join(tiff_dir, base_name + '.tiff')
@@ -181,7 +172,7 @@ def create_3d_nifti_from_patient_data(patient_files, tiff_dir, label_map):
             img_array = np.mean(img_array, axis=2).astype(np.uint8)
         
         # マスクを生成
-        mask_array = xml_to_mask(xml_path, tiff_path, label_map)
+        mask_array = json_to_mask(json_path, tiff_path, label_map)
         
         # マスクサイズが画像サイズと異なる場合はリサイズ
         if mask_array.shape != img_array.shape:
@@ -264,8 +255,9 @@ def create_nnunet_dataset(patient_groups, tiff_dir, output_dir, label_map):
     
     # 患者ごとに処理
     for idx, (patient_key, patient_files) in enumerate(patient_groups.items()):
-        ex_num, se_num = patient_key
-        case_name = f"{ex_num}_{se_num}"
+        hash_id, ex_num, se_num = patient_key
+        # nnU-Net用のケース名: {Hash}_{EX}_{SE}
+        case_name = f"{hash_id}_{ex_num}_{se_num}"
         
         print(f"\n[{idx+1}/{len(patient_groups)}] 処理中: {case_name} ({len(patient_files)}スライス)")
         
@@ -377,17 +369,17 @@ def main():
             print("処理を中止しました。")
             return
     
-    # XMLファイルを患者ごとにグループ化
-    print(f"\nXMLファイルをグループ化中...")
-    patient_groups = group_files_by_patient(CVAT_XML_DIR)
+    # JSONファイルを患者ごとにグループ化
+    print(f"\nJSONファイルをグループ化中...")
+    patient_groups = group_files_by_patient(CVAT_JSON_DIR)
     
     if not patient_groups:
-        print(f"エラー: {CVAT_XML_DIR} にXMLファイルが見つかりません。")
+        print(f"エラー: {CVAT_JSON_DIR} にJSONファイルが見つかりません。")
         return
     
-    print(f"患者数: {len(patient_groups)}")
+    print(f"患者(シリーズ)数: {len(patient_groups)}")
     for patient_key, files in patient_groups.items():
-        print(f"  {patient_key[0]}_{patient_key[1]}: {len(files)}スライス")
+        print(f"  {patient_key[0]}_{patient_key[1]}_{patient_key[2]}: {len(files)}スライス")
     
     # nnU-Netデータセットを作成
     case_list = create_nnunet_dataset(

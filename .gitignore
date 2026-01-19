@@ -1,6 +1,9 @@
 Data/
-datasets/
+data_sort/
+data_Tiff/
+annotated_data/
 runs/
+inference_input/
 nnUNet_raw/
 nnUNet_preprocessed/
 nnUNet_results/

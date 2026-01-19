@@ -1,61 +1,72 @@
-# ->Predict Phase
-# たくさん画像いれてgui.pyで良くないやつをピックアップしてneedFixへ
-# convertToTiff.pyでneedFixからTiff画像にしてTiffsに保存。
-# Tiffにしたらノートパソコンから取り出してCVATにあげる ->Annotation Phase。
-# CVATでアノテーションしまくる
-出力形式は「LabelMe JSON 1.1」
+# データをUSBで取り込む
+# C:/imageProcessing/DATAに入れる C:/imageProcessing/DATA/{y_m_d}
+python dataConversionCode/DATA2data.py
+# C:/imageProcessing/data_sort/{y_m_d}/に {hash(ID+date+time)+EX}フォルダが保存される。txtとDICOMDIRも
+python dataConversionCode/dcmToTiff.py
+# data_Tiff/{series}/に{hash(ID+Date+time)+EX+SE+IMG}でたくさん保存される
+
+# Tiffにすれば患者情報ないのでオンライン可能
+# CVATでアノテーションしまくる -> Annotation Tool使いやすくすればオフラインでもできそう
+出力形式は「LabelMe 3.0」
 # Annotation Phase -> Training Phase
 
 ```bash(bash codes/setup_nnunet.sh)
 # nnU-Netのインストール（まだの場合）
 pip install nnunetv2
 # 環境変数の設定
-export nnUNet_raw="パス/to/nnUNet_raw"
-export nnUNet_preprocessed="パス/to/nnUNet_preprocessed"
-export nnUNet_results="パス/to/nnUNet_results"
+export nnUNet_raw="C:/imageProcessing/nnUNet_raw"
+export nnUNet_preprocessed="C:/imageProcessing/nnUNet_preprocessed"
+export nnUNet_results="C:/imageProcessing/nnUNet_results"
 ```
 
 =========================================
-; データ準備(json->nifti)
+; データ準備(xml->nifti)
 python codes/cvat_to_nnunet.py
-# 変更するところ
+# 実行前に変更するところ
 SERIES_NAME = "eT1W_SE_cor"
 # タスクID (001から999の間)
-TASK_ID = 102
+TASK_ID = 119
 # 入力データのパス
-CVAT_JSON_DIR = "Data/cvat_output"  # CVATから出力したJSONファイルがある場所
+CVAT_JSON_DIR = "annotated/cvat_output"  # CVATから出力したJSONファイルがある場所
 
 =========================================
 # プランニングと前処理
-python codes/train_nnunet.py --mode plan
+python codes/train_nnunet.py --task_id {119} --mode plan --planner nnUNetPlannerResEncM
 
-# 学習開始（100エポック）
-python codes/train_nnunet.py --mode train --configuration 3d_fullres
-#--task_id 102 --epochs 100 --configuration3d_fullres
+# 学習開始
+python codes/train_nnunet.py --task_id {119} --mode train --configuration 2d --fold 0 --epochs 20 
+#default: --task_id 102 --mode full --configuration 2d --fold 0 --epochs 100 --planner None
 
 ; nnUNet_results\Dataset102_EyeMuscleSegmentation
 ; \nnUNetTrainer__nnUNetPlans__2d\fold_0\training_log_***.txt
 ; でログ確認
 
-# 予測
-python codes/train_nnunet.py --mode predict --task_id 102 \
-  --input_folder C:/Users/mitae/workspace/imageP/nnUnet_raw/Dataset102_EyeMuscleSegmentation/imagesTs
+# 推論用Tiff->Nifti
+python dataConversionCode/tiff_to_nifti_inference.py --input {"C:/Users/mitae/workspace/imageProcessing/DATA/Tiffs/T1W_SE_cor"} --output inference_input
 
+# 予測
+python codes/train_nnunet.py --mode predict --task_id {119} --input_folder inference_input
 ;   C:/Users/mitae/workspace/Tom500/TOM500/train/image
 =========================================
 # -> Predict Phase
 eyeMuscleGUI.py で予測
+Niftiファイルを選択 # 後でDICOM直接選択できるようにする。
 
-ここはつなげる
+# ここはつなげる
 
 annnotation_tool.py でアノテーション
 Tiff画像
+Json, xmlにして取得
+# -> training phase
 
 =========================================
 git clone https://github.com/Enzun/eye
-
 git init
 
+; 取り込む
+git pull origin main
+
+; 更新
 git add .
 git commit -m "add"
 git push

@@ -9,6 +9,9 @@ import subprocess
 import argparse
 from pathlib import Path
 
+# プロジェクトルートを取得
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 def check_environment():
     """環境変数の確認"""
@@ -27,20 +30,23 @@ def check_environment():
             print(f"  - {var}")
 
         print("\nsetup_nnunet.sh を実行するか、プロジェクトルートの .env ファイルを設定してください:")
-        print('nnUNet_raw="C:/Users/mitae/workspace/imageP/nnUNet_raw"')
-        print('nnUNet_preprocessed="C:/Users/mitae/workspace/imageP/nnUNet_preprocessed"')
-        print('nnUNet_results="C:/Users/mitae/workspace/imageP/nnUNet_results"')
+        print(f'nnUNet_raw="{os.path.join(PROJECT_ROOT, "nnUNet_raw")}"')
+        print(f'nnUNet_preprocessed="{os.path.join(PROJECT_ROOT, "nnUNet_preprocessed")}"')
+        print(f'nnUNet_results="{os.path.join(PROJECT_ROOT, "nnUNet_results")}"')
         return False
 
     
     return True
 
 
-def run_planning(task_id: int):
+def run_planning(task_id: int, planner: str = "nnUNetPlannerResEncM"):
     """データのプランニングと前処理を実行"""
     print("\n=== Step 1: データのプランニングと前処理 ===")
     
     cmd = f"nnUNetv2_plan_and_preprocess -d {task_id} --verify_dataset_integrity --clean"
+    if planner:
+        cmd += f" -pl {planner}"
+    
     print(f"実行コマンド: {cmd}")
     
     try:
@@ -67,8 +73,8 @@ def run_training(task_id: int, fold: int = 0, configuration: str = "2d",
         f"--npz "  # 検証時にnpzファイルを保存
     )
     
-    # if epochs != 1000:  # デフォルトは1000エポック
-    #     cmd += f"--epochs {epochs} "
+    if epochs != 1000:  # デフォルトは1000エポック
+        cmd += f"--epochs {epochs} "
     
     print(f"実行コマンド: {cmd}")
     print("(これには時間がかかります...)")
@@ -207,8 +213,10 @@ def main():
     parser.add_argument('--input_folder', type=str,
                        help='推論時の入力フォルダ')
     parser.add_argument('--output_folder', type=str, 
-                       default='C:/Users/mitae/workspace/imageP/nnUNet_predictions',
+                       default=os.path.join(PROJECT_ROOT, 'nnUNet_predictions'),
                        help='推論時の出力フォルダ')
+    parser.add_argument('--planner', type=str, default=None,
+                       help='使用するPlanner (例: nnUNetPlannerResEncM)。指定なしでデフォルト。')
     
     args = parser.parse_args()
     
@@ -218,7 +226,7 @@ def main():
     
     # モード別実行
     if args.mode in ['full', 'plan']:
-        if not run_planning(args.task_id):
+        if not run_planning(args.task_id, args.planner):
             sys.exit(1)
     
     if args.mode in ['full', 'train']:
