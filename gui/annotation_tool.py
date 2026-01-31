@@ -1,6 +1,10 @@
 """
-眼筋アノテーションツール - 基本版
+眼筋アノテーションツール - 改良版
 TIFF画像にポリゴンアノテーションを行い、JSON形式で保存
+- マウスホイールでズーム
+- ドラッグでパン
+- ポリゴン完成時・画像切替時に自動保存
+- ラベルごとのクリア機能
 """
 
 import sys
@@ -9,17 +13,18 @@ from pathlib import Path
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QListWidget, QGroupBox,
-    QRadioButton, QButtonGroup, QMessageBox, QScrollArea, QListWidgetItem
+    QRadioButton, QButtonGroup, QMessageBox, QScrollArea, QListWidgetItem,
+    QCheckBox, QSlider
 )
-from PyQt5.QtCore import Qt, QPoint, QRect
-from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QPolygon
+from PyQt5.QtCore import Qt, QPoint, QRect, QPointF
+from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QPolygon, QTransform
 from PIL import Image
 import numpy as np
 import cv2
 
 
-class AnnotationCanvas(QLabel):
-    """アノテーション用のキャンバス"""
+class AnnotationCanvas(QWidget):
+    """アノテーション用のキャンバス（ズーム・パン対応）"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -29,11 +34,22 @@ class AnnotationCanvas(QLabel):
         self.original_image = None
         self.display_image = None
         self.image_path = None
+        self.display_pixmap = None  # 描画用pixmap
         
         # アノテーションデータ
         self.current_polygon = []  # 現在描画中のポリゴン
         self.annotations = []  # 完成したアノテーション [{label, points}]
         self.selected_annotation_idx = None
+        
+        # ズーム・パン設定
+        self.zoom_level = 1.0
+        self.min_zoom = 0.1
+        self.max_zoom = 10.0
+        self.zoom_step = 0.15
+        self.pan_offset_x = 0.0  # パンオフセット（ピクセル）
+        self.pan_offset_y = 0.0
+        self.last_pan_pos = None
+        self.is_panning = False
         
         # 描画設定
         self.point_radius = 4
@@ -52,8 +68,9 @@ class AnnotationCanvas(QLabel):
         self.setMouseTracking(True)
         self.setMinimumSize(600, 600)
         self.setStyleSheet("border: 2px solid #666; background-color: #2b2b2b;")
+        self.setFocusPolicy(Qt.StrongFocus)
     
-    def load_image(self, image_path):
+    def load_image(self, image_path, reset_zoom=True):
         """TIFF画像を読み込み"""
         self.image_path = image_path
         
@@ -75,6 +92,12 @@ class AnnotationCanvas(QLabel):
         # アノテーションをクリア
         self.annotations = []
         self.current_polygon = []
+        
+        # ズームをリセット（設定による）
+        if reset_zoom:
+            self.zoom_level = 1.0
+            self.pan_offset_x = 0.0
+            self.pan_offset_y = 0.0
         
         self.update_display()
     
@@ -130,24 +153,84 @@ class AnnotationCanvas(QLabel):
                 cv2.line(img, tuple(self.current_polygon[-1]), 
                         tuple(self.current_polygon[0]), color, 1, cv2.LINE_AA)
         
-        # QPixmapに変換して表示
+        # QPixmapに変換
         height, width, channel = img.shape
         bytes_per_line = 3 * width
         q_img = QImage(img.data, width, height, bytes_per_line, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(q_img)
+        self.display_pixmap = QPixmap.fromImage(q_img)
         
-        # ウィンドウサイズに合わせてスケーリング
-        scaled_pixmap = pixmap.scaled(
-            self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+        # ズームレベル表示を更新
+        if self.parent_window:
+            self.parent_window.update_zoom_display()
+        
+        # 再描画をトリガー
+        self.update()
+    
+    def paintEvent(self, event):
+        """カスタム描画（ズーム・パン対応）"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        
+        # 背景を塗りつぶし
+        painter.fillRect(self.rect(), QColor(43, 43, 43))
+        
+        if self.display_pixmap is None:
+            return
+        
+        # ズーム後のサイズを計算
+        scaled_width = int(self.display_pixmap.width() * self.zoom_level)
+        scaled_height = int(self.display_pixmap.height() * self.zoom_level)
+        
+        # 描画位置（パンオフセット適用）
+        x = int(self.pan_offset_x)
+        y = int(self.pan_offset_y)
+        
+        # スケーリングして描画
+        scaled_pixmap = self.display_pixmap.scaled(
+            scaled_width, scaled_height, 
+            Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
-        self.setPixmap(scaled_pixmap)
+        painter.drawPixmap(x, y, scaled_pixmap)
+    
+    def wheelEvent(self, event):
+        """マウスホイールでズーム（カーソル位置を中心に）"""
+        if self.original_image is None:
+            return
+        
+        # マウス位置を取得
+        mouse_x = event.pos().x()
+        mouse_y = event.pos().y()
+        
+        # ズーム前のマウス位置に対応する画像座標を計算
+        old_img_x = (mouse_x - self.pan_offset_x) / self.zoom_level
+        old_img_y = (mouse_y - self.pan_offset_y) / self.zoom_level
+        
+        # ズームレベルを更新
+        old_zoom = self.zoom_level
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self.zoom_level = min(self.max_zoom, self.zoom_level * 1.15)
+        else:
+            self.zoom_level = max(self.min_zoom, self.zoom_level / 1.15)
+        
+        # マウス位置が同じ画像座標を指すようにパンオフセットを調整
+        self.pan_offset_x = mouse_x - old_img_x * self.zoom_level
+        self.pan_offset_y = mouse_y - old_img_y * self.zoom_level
+        
+        self.update()
     
     def mousePressEvent(self, event):
         """マウスクリックイベント"""
         if self.original_image is None:
             return
         
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MiddleButton:
+            # 中ボタンでパン開始
+            self.is_panning = True
+            self.last_pan_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+        
+        elif event.button() == Qt.LeftButton:
             # クリック位置を画像座標に変換
             pos = self.map_to_image_coords(event.pos())
             if pos:
@@ -161,39 +244,55 @@ class AnnotationCanvas(QLabel):
             else:
                 QMessageBox.warning(self, "警告", "最低3点必要です")
     
+    def mouseMoveEvent(self, event):
+        """マウス移動イベント"""
+        if self.is_panning and self.last_pan_pos:
+            delta = event.pos() - self.last_pan_pos
+            self.pan_offset_x += delta.x()
+            self.pan_offset_y += delta.y()
+            self.last_pan_pos = event.pos()
+            self.update_display()
+    
+    def mouseReleaseEvent(self, event):
+        """マウスリリースイベント"""
+        if event.button() == Qt.MiddleButton:
+            self.is_panning = False
+            self.last_pan_pos = None
+            self.setCursor(Qt.ArrowCursor)
+    
     def map_to_image_coords(self, widget_pos):
-        """ウィジェット座標を画像座標に変換"""
-        if self.pixmap() is None:
+        """ウィジェット座標を画像座標に変換（パン・ズーム考慮）"""
+        if self.original_image is None:
             return None
         
-        # ピクセルマップのサイズと位置を取得
-        pixmap_rect = self.pixmap().rect()
-        widget_rect = self.rect()
-        
-        # スケール比を計算
-        scale_x = self.original_image.shape[1] / pixmap_rect.width()
-        scale_y = self.original_image.shape[0] / pixmap_rect.height()
-        
-        # ピクセルマップの表示位置を計算（中央配置）
-        x_offset = (widget_rect.width() - pixmap_rect.width()) / 2
-        y_offset = (widget_rect.height() - pixmap_rect.height()) / 2
-        
-        # ウィジェット座標からピクセルマップ座標に変換
-        pixmap_x = widget_pos.x() - x_offset
-        pixmap_y = widget_pos.y() - y_offset
-        
-        # 範囲チェック
-        if (pixmap_x < 0 or pixmap_x >= pixmap_rect.width() or
-            pixmap_y < 0 or pixmap_y >= pixmap_rect.height()):
-            return None
+        # パンオフセットを考慮してズーム画像上の位置を計算
+        zoomed_x = widget_pos.x() - self.pan_offset_x
+        zoomed_y = widget_pos.y() - self.pan_offset_y
         
         # 画像座標に変換
-        image_x = int(pixmap_x * scale_x)
-        image_y = int(pixmap_y * scale_y)
+        image_x = zoomed_x / self.zoom_level
+        image_y = zoomed_y / self.zoom_level
         
-        # 画像範囲内に制限
-        image_x = max(0, min(image_x, self.original_image.shape[1] - 1))
-        image_y = max(0, min(image_y, self.original_image.shape[0] - 1))
+        # 範囲チェック
+        img_h, img_w = self.original_image.shape[:2]
+        if image_x < 0 or image_x >= img_w or image_y < 0 or image_y >= img_h:
+            return None
+        
+        # 整数座標に変換
+        return [int(image_x), int(image_y)]
+    
+    def widget_to_image_coords(self, widget_pos):
+        """ウィジェット座標を画像座標に変換（float版）"""
+        if self.original_image is None:
+            return None
+        
+        # パンオフセットを考慮してズーム画像上の位置を計算
+        zoomed_x = widget_pos.x() - self.pan_offset_x
+        zoomed_y = widget_pos.y() - self.pan_offset_y
+        
+        # 画像座標に変換
+        image_x = zoomed_x / self.zoom_level
+        image_y = zoomed_y / self.zoom_level
         
         return [image_x, image_y]
     
@@ -216,6 +315,9 @@ class AnnotationCanvas(QLabel):
         # アノテーションリストを更新
         self.parent_window.update_annotation_list()
         
+        # 自動保存
+        self.parent_window.auto_save_json()
+        
         self.update_display()
     
     def delete_selected_annotation(self):
@@ -224,11 +326,27 @@ class AnnotationCanvas(QLabel):
             del self.annotations[self.selected_annotation_idx]
             self.selected_annotation_idx = None
             self.parent_window.update_annotation_list()
+            self.parent_window.auto_save_json()
             self.update_display()
+    
+    def clear_annotations_by_label(self, label):
+        """指定されたラベルのアノテーションを削除"""
+        self.annotations = [a for a in self.annotations if a['label'] != label]
+        self.selected_annotation_idx = None
+        self.parent_window.update_annotation_list()
+        self.parent_window.auto_save_json()
+        self.update_display()
     
     def clear_current_polygon(self):
         """現在描画中のポリゴンをクリア"""
         self.current_polygon = []
+        self.update_display()
+    
+    def reset_zoom(self):
+        """ズームをリセット"""
+        self.zoom_level = 1.0
+        self.pan_offset_x = 0.0
+        self.pan_offset_y = 0.0
         self.update_display()
     
     def get_annotations_data(self):
@@ -277,14 +395,22 @@ class AnnotationTool(QMainWindow):
         
         # 作業ディレクトリ
         self.work_dir = None
+        self.series_name = None  # シリーズ名（親フォルダ名）
         self.current_file_index = 0
         self.file_list = []
+        
+        # プロジェクトルート（annotation_tool.pyの2つ上）
+        self.project_root = Path(__file__).parent.parent
+        self.annotated_data_dir = self.project_root / "annotated_data"
+        
+        # ズーム維持設定
+        self.maintain_zoom_on_switch = True
         
         self.init_ui()
     
     def init_ui(self):
         """UIを初期化"""
-        self.setWindowTitle("眼筋アノテーションツール v1.0")
+        self.setWindowTitle("眼筋アノテーションツール v2.0")
         self.setGeometry(100, 100, 1400, 900)
         
         # メインウィジェット
@@ -312,7 +438,7 @@ class AnnotationTool(QMainWindow):
         panel.setLayout(layout)
         
         # タイトル
-        title = QLabel("アノテーションツール")
+        title = QLabel("アノテーションツール v2.0")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(title)
         
@@ -349,6 +475,30 @@ class AnnotationTool(QMainWindow):
         file_group.setLayout(file_layout)
         layout.addWidget(file_group)
         
+        # ズームコントロールグループ
+        zoom_group = QGroupBox("ズーム")
+        zoom_layout = QVBoxLayout()
+        
+        self.zoom_label = QLabel("ズーム: 100%")
+        self.zoom_label.setStyleSheet("font-weight: bold;")
+        zoom_layout.addWidget(self.zoom_label)
+        
+        zoom_help = QLabel("ホイール: ズーム\n中ボタンドラッグ: パン")
+        zoom_help.setStyleSheet("color: #aaa; font-size: 10px;")
+        zoom_layout.addWidget(zoom_help)
+        
+        self.reset_zoom_btn = QPushButton("ズームをリセット")
+        self.reset_zoom_btn.clicked.connect(self.reset_zoom)
+        zoom_layout.addWidget(self.reset_zoom_btn)
+        
+        self.maintain_zoom_checkbox = QCheckBox("画像切替時にズームを維持")
+        self.maintain_zoom_checkbox.setChecked(True)
+        self.maintain_zoom_checkbox.toggled.connect(self.on_maintain_zoom_changed)
+        zoom_layout.addWidget(self.maintain_zoom_checkbox)
+        
+        zoom_group.setLayout(zoom_layout)
+        layout.addWidget(zoom_group)
+        
         # ラベル選択グループ
         label_group = QGroupBox("ラベル選択")
         label_layout = QVBoxLayout()
@@ -356,6 +506,7 @@ class AnnotationTool(QMainWindow):
         # 筋肉選択
         label_layout.addWidget(QLabel("筋肉:"))
         self.muscle_group = QButtonGroup()
+        self.muscle_radios = {}
         
         muscle_names = {
             "ir": "下直筋 (ir)",
@@ -366,11 +517,12 @@ class AnnotationTool(QMainWindow):
             "io": "下斜筋 (io)"
         }
         
-        for muscle_id in self.muscle_labels:
-            radio = QRadioButton(muscle_names[muscle_id])
+        for i, muscle_id in enumerate(self.muscle_labels):
+            radio = QRadioButton(f"{i+1}. {muscle_names[muscle_id]}")
             radio.setProperty("muscle_id", muscle_id)
             radio.toggled.connect(self.on_muscle_changed)
             self.muscle_group.addButton(radio)
+            self.muscle_radios[muscle_id] = radio
             label_layout.addWidget(radio)
             
             if muscle_id == "sr":
@@ -379,8 +531,8 @@ class AnnotationTool(QMainWindow):
         # 現在のラベル表示
         self.current_label_display = QLabel()
         self.current_label_display.setStyleSheet(
-            "font-size: 14px; font-weight: bold; padding: 10px; "
-            "background-color: #444; border-radius: 5px;"
+            "font-size: 16px; font-weight: bold; padding: 10px; "
+            "background-color: #0d47a1; border-radius: 5px; text-align: center;"
         )
         label_layout.addWidget(self.current_label_display)
         
@@ -392,10 +544,10 @@ class AnnotationTool(QMainWindow):
         draw_layout = QVBoxLayout()
         
         help_text = QLabel(
-            "1. 筋肉を選択\n"
-            "2. 左クリック: 点を追加\n"
-            "3. 右クリック: ポリゴン完成\n"
-            "(最低3点必要)"
+            "左クリック: 点を追加\n"
+            "右クリック: ポリゴン完成\n"
+            "Esc: 描画をクリア\n"
+            "Delete: 選択削除"
         )
         help_text.setStyleSheet("color: #aaa; font-size: 11px;")
         draw_layout.addWidget(help_text)
@@ -407,6 +559,12 @@ class AnnotationTool(QMainWindow):
         self.clear_current_btn = QPushButton("現在の描画をクリア")
         self.clear_current_btn.clicked.connect(self.canvas.clear_current_polygon)
         draw_layout.addWidget(self.clear_current_btn)
+        
+        # ラベル別クリアボタン
+        self.clear_label_btn = QPushButton("選択ラベルをクリア")
+        self.clear_label_btn.clicked.connect(self.clear_current_label_annotations)
+        self.clear_label_btn.setStyleSheet("background-color: #c62828;")
+        draw_layout.addWidget(self.clear_label_btn)
         
         draw_group.setLayout(draw_layout)
         layout.addWidget(draw_group)
@@ -426,22 +584,10 @@ class AnnotationTool(QMainWindow):
         anno_group.setLayout(anno_layout)
         layout.addWidget(anno_group)
         
-        # 保存/読込
-        save_group = QGroupBox("保存/読込")
-        save_layout = QVBoxLayout()
-        
-        self.save_btn = QPushButton("JSONを保存")
-        self.save_btn.clicked.connect(self.save_json)
-        self.save_btn.setEnabled(False)
-        save_layout.addWidget(self.save_btn)
-        
-        self.load_json_btn = QPushButton("JSONを読込")
-        self.load_json_btn.clicked.connect(self.load_json)
-        self.load_json_btn.setEnabled(False)
-        save_layout.addWidget(self.load_json_btn)
-        
-        save_group.setLayout(save_layout)
-        layout.addWidget(save_group)
+        # 自動保存の情報表示
+        save_info = QLabel("※ポリゴン完成・画像切替時に自動保存")
+        save_info.setStyleSheet("color: #4caf50; font-size: 11px; padding: 5px;")
+        layout.addWidget(save_info)
         
         layout.addStretch()
         
@@ -450,12 +596,38 @@ class AnnotationTool(QMainWindow):
         
         return panel
     
+    def keyPressEvent(self, event):
+        """キーボードショートカット"""
+        key = event.key()
+        
+        # 1-6キーでラベル切替
+        if Qt.Key_1 <= key <= Qt.Key_6:
+            idx = key - Qt.Key_1
+            if idx < len(self.muscle_labels):
+                muscle_id = self.muscle_labels[idx]
+                self.muscle_radios[muscle_id].setChecked(True)
+        
+        # 矢印キーで画像切替
+        elif key == Qt.Key_Left:
+            self.prev_file()
+        elif key == Qt.Key_Right:
+            self.next_file()
+        
+        # Escで現在の描画をクリア
+        elif key == Qt.Key_Escape:
+            self.canvas.clear_current_polygon()
+        
+        # Deleteで選択アノテーション削除
+        elif key == Qt.Key_Delete:
+            self.delete_annotation()
+    
     def select_folder(self):
         """フォルダを選択してTIFFファイル一覧を取得"""
         folder = QFileDialog.getExistingDirectory(self, "TIFFフォルダを選択")
         
         if folder:
             self.work_dir = Path(folder)
+            self.series_name = self.work_dir.name  # シリーズ名 = 親フォルダ名
             
             # TIFFファイルを検索
             self.file_list = sorted(list(self.work_dir.glob("*.tiff")) + 
@@ -465,13 +637,56 @@ class AnnotationTool(QMainWindow):
                 QMessageBox.warning(self, "警告", "TIFFファイルが見つかりません")
                 return
             
+            # 全TIFFファイルに対応するJSONを事前作成
+            self.create_json_files_for_all()
+            
             self.current_file_index = 0
             self.load_current_file()
             
             self.prev_btn.setEnabled(True)
             self.next_btn.setEnabled(True)
-            self.save_btn.setEnabled(True)
-            self.load_json_btn.setEnabled(True)
+    
+    def get_json_save_dir(self):
+        """JSONの保存先ディレクトリを取得（annotated_data/{series_name}/）"""
+        if self.series_name is None:
+            return None
+        json_dir = self.annotated_data_dir / self.series_name
+        json_dir.mkdir(parents=True, exist_ok=True)
+        return json_dir
+    
+    def get_json_path(self, tiff_path):
+        """TIFFファイルに対応するJSONのパスを取得"""
+        json_dir = self.get_json_save_dir()
+        if json_dir is None:
+            return None
+        return json_dir / (Path(tiff_path).stem + '.json')
+    
+    def create_json_files_for_all(self):
+        """全TIFFファイルに対応するJSONファイルを作成（存在しない場合）"""
+        json_dir = self.get_json_save_dir()
+        if json_dir is None:
+            return
+        
+        created_count = 0
+        for tiff_path in self.file_list:
+            json_path = self.get_json_path(tiff_path)
+            if not json_path.exists():
+                # 空のアノテーションデータを作成
+                empty_data = {
+                    "version": "4.5.9",
+                    "flags": {},
+                    "shapes": [],
+                    "imagePath": tiff_path.name,
+                    "imageData": None,
+                    "imageHeight": 0,
+                    "imageWidth": 0
+                }
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(empty_data, f, indent=2, ensure_ascii=False)
+                created_count += 1
+        
+        if created_count > 0:
+            self.statusBar().showMessage(f"{created_count}個のJSONを {json_dir} に作成", 3000)
     
     def select_single_file(self):
         """単一ファイルを選択"""
@@ -482,12 +697,14 @@ class AnnotationTool(QMainWindow):
         
         if file_path:
             self.work_dir = Path(file_path).parent
+            self.series_name = self.work_dir.name  # シリーズ名 = 親フォルダ名
             self.file_list = [Path(file_path)]
             self.current_file_index = 0
-            self.load_current_file()
             
-            self.save_btn.setEnabled(True)
-            self.load_json_btn.setEnabled(True)
+            # JSONファイルを事前作成
+            self.create_json_files_for_all()
+            
+            self.load_current_file()
     
     def load_current_file(self):
         """現在のファイルを読み込み"""
@@ -495,30 +712,60 @@ class AnnotationTool(QMainWindow):
             return
         
         current_file = self.file_list[self.current_file_index]
-        self.canvas.load_image(str(current_file))
+        
+        # ズーム維持設定を反映
+        reset_zoom = not self.maintain_zoom_on_switch
+        self.canvas.load_image(str(current_file), reset_zoom=reset_zoom)
         
         # ファイル情報を表示
         self.file_label.setText(
             f"ファイル: {current_file.name}\n"
+            f"シリーズ: {self.series_name}\n"
             f"({self.current_file_index + 1} / {len(self.file_list)})"
         )
         
         # 対応するJSONファイルがあれば自動読込
-        json_path = current_file.with_suffix('.json')
-        if json_path.exists():
+        json_path = self.get_json_path(current_file)
+        if json_path and json_path.exists():
             self.load_json_from_path(json_path)
     
     def prev_file(self):
         """前のファイルに移動"""
         if self.current_file_index > 0:
+            # 現在の画像を保存
+            self.auto_save_json()
+            
             self.current_file_index -= 1
             self.load_current_file()
     
     def next_file(self):
         """次のファイルに移動"""
         if self.current_file_index < len(self.file_list) - 1:
+            # 現在の画像を保存
+            self.auto_save_json()
+            
             self.current_file_index += 1
             self.load_current_file()
+    
+    def auto_save_json(self):
+        """現在のアノテーションを自動保存（annotated_data/{series_name}/ に保存）"""
+        if not self.file_list:
+            return
+        
+        data = self.canvas.get_annotations_data()
+        if data is None:
+            return
+        
+        current_file = self.file_list[self.current_file_index]
+        json_path = self.get_json_path(current_file)
+        
+        if json_path is None:
+            return
+        
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        self.statusBar().showMessage(f"保存: {self.series_name}/{json_path.name}", 2000)
     
     def on_muscle_changed(self, checked):
         """筋肉選択が変更された"""
@@ -531,7 +778,27 @@ class AnnotationTool(QMainWindow):
     def update_label_display(self):
         """現在のラベル表示を更新"""
         current_label = self.get_current_label()
+        color = self.canvas.label_colors.get(current_label, (128, 128, 128))
+        color_hex = f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}"
+        
         self.current_label_display.setText(f"現在のラベル: {current_label}")
+        self.current_label_display.setStyleSheet(
+            f"font-size: 16px; font-weight: bold; padding: 10px; "
+            f"background-color: {color_hex}; border-radius: 5px; text-align: center;"
+        )
+    
+    def update_zoom_display(self):
+        """ズーム表示を更新"""
+        zoom_percent = int(self.canvas.zoom_level * 100)
+        self.zoom_label.setText(f"ズーム: {zoom_percent}%")
+    
+    def reset_zoom(self):
+        """ズームをリセット"""
+        self.canvas.reset_zoom()
+    
+    def on_maintain_zoom_changed(self, checked):
+        """ズーム維持設定が変更された"""
+        self.maintain_zoom_on_switch = checked
     
     def get_current_label(self):
         """現在選択されているラベルを取得"""
@@ -557,39 +824,20 @@ class AnnotationTool(QMainWindow):
         """選択されたアノテーションを削除"""
         self.canvas.delete_selected_annotation()
     
-    def save_json(self):
-        """JSONファイルを保存"""
-        data = self.canvas.get_annotations_data()
+    def clear_current_label_annotations(self):
+        """現在選択中のラベルのアノテーションをクリア"""
+        current_label = self.get_current_label()
         
-        if data is None:
-            QMessageBox.warning(self, "警告", "保存する画像がありません")
-            return
-        
-        # デフォルトの保存先を提案
-        if self.file_list:
-            current_file = self.file_list[self.current_file_index]
-            default_path = str(current_file.with_suffix('.json'))
-        else:
-            default_path = "annotation.json"
-        
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "JSONを保存", default_path, "JSON Files (*.json)"
+        # 確認ダイアログ
+        reply = QMessageBox.question(
+            self, "確認",
+            f"ラベル「{current_label}」のアノテーションをすべて削除しますか？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
         )
         
-        if file_path:
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            
-            QMessageBox.information(self, "成功", f"保存しました:\n{file_path}")
-    
-    def load_json(self):
-        """JSONファイルを読み込み"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "JSONを読込", "", "JSON Files (*.json)"
-        )
-        
-        if file_path:
-            self.load_json_from_path(Path(file_path))
+        if reply == QMessageBox.Yes:
+            self.canvas.clear_annotations_by_label(current_label)
     
     def load_json_from_path(self, json_path):
         """指定されたパスからJSONを読み込み"""
@@ -663,6 +911,13 @@ def main():
         }
         QLabel {
             color: #ffffff;
+        }
+        QCheckBox {
+            spacing: 5px;
+        }
+        QCheckBox::indicator {
+            width: 15px;
+            height: 15px;
         }
     """)
     
