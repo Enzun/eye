@@ -9,3 +9,5 @@ nnUNet_preprocessed/
 nnUNet_results/
 nnUNet_predictions/
 .env
+__pycache__/
+*.pyc
