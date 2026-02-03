@@ -9,7 +9,8 @@ from pathlib import Path
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QTableWidget, QTableWidgetItem,
-    QGroupBox, QSpinBox, QComboBox, QMessageBox, QProgressBar, QSlider
+    QGroupBox, QSpinBox, QComboBox, QMessageBox, QProgressBar, QSlider,
+    QTreeWidget, QTreeWidgetItem, QCheckBox, QFrame
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QPixmap, QImage
@@ -20,9 +21,25 @@ import tempfile
 import subprocess
 
 
+class ScrollableImageLabel(QLabel):
+    """マウスホイールでスクロール可能な画像ラベル"""
+    wheel_scrolled = pyqtSignal(int)  # delta
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+    
+    def wheelEvent(self, event):
+        """画像上でのマウスホイールイベント"""
+        delta = event.angleDelta().y()
+        self.wheel_scrolled.emit(delta)
+        event.accept()
+
+
 class PredictionThread(QThread):
     """予測処理を別スレッドで実行"""
-    finished = pyqtSignal(object, dict, dict)  # 画像配列、面積データ、体積データ
+    # 画像配列、面積データ、体積データ、元画像データ、予測データ、スペーシング
+    finished = pyqtSignal(object, dict, dict, object, object, object)
     error = pyqtSignal(str)
     
     def __init__(self, nifti_path, predictor):
@@ -32,8 +49,9 @@ class PredictionThread(QThread):
     
     def run(self):
         try:
-            img_slices, slice_areas, volumes = self.predictor.predict_from_nifti(self.nifti_path)
-            self.finished.emit(img_slices, slice_areas, volumes)
+            result = self.predictor.predict_from_nifti(self.nifti_path)
+            img_slices, slice_areas, volumes, image_array, pred_array, spacing = result
+            self.finished.emit(img_slices, slice_areas, volumes, image_array, pred_array, spacing)
         except Exception as e:
             import traceback
             error_msg = f"{str(e)}\n\n{traceback.format_exc()}"
@@ -101,8 +119,12 @@ class NnUNetPredictor:
             print(error_msg)
             raise RuntimeError(error_msg)  # より詳細なエラーメッセージを投げる
     
-    def visualize_slice(self, image_slice, pred_slice, spacing):
-        """単一スライスの可視化と面積計算"""
+    def visualize_slice(self, image_slice, pred_slice, spacing, show_labels=True):
+        """単一スライスの可視化と面積計算
+        
+        Args:
+            show_labels: ラベルテキストを画像上に表示するかどうか
+        """
         # 画像を8ビットに正規化
         img_normalized = ((image_slice - image_slice.min()) / 
                          (image_slice.max() - image_slice.min()) * 255).astype(np.uint8)
@@ -149,9 +171,10 @@ class NnUNetPredictor:
                 
                 # 描画
                 cv2.polylines(img_bgr, [contour], isClosed=True, color=color, thickness=2)
-                x, y = contour.min(axis=0)[0]
-                cv2.putText(img_bgr, side_label, (x, y - 5), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                if show_labels:
+                    x, y = contour.min(axis=0)[0]
+                    cv2.putText(img_bgr, side_label, (x, y - 5), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
         return img_bgr, label_areas
     
@@ -231,7 +254,7 @@ class NnUNetPredictor:
                     if total_volume > 0:
                         volumes[side_label] = total_volume
             
-            return visualized_slices, slice_areas, volumes
+            return visualized_slices, slice_areas, volumes, image_array, pred_array, spacing
 
 
 class EyeMuscleGUI(QMainWindow):
@@ -247,12 +270,19 @@ class EyeMuscleGUI(QMainWindow):
         self.volumes = None
         self.current_slice_idx = 0
         
+        # 動的再描画用のデータ
+        self.image_array = None
+        self.pred_array = None
+        self.spacing = None
+        self.show_labels = True
+        self.zoom_level = 100  # ズームレベル（%）
+        
         self.init_ui()
     
     def init_ui(self):
         """UIを初期化"""
         self.setWindowTitle("眼筋セグメンテーション GUI v2 (NIfTI対応)")
-        self.setGeometry(100, 100, 1400, 900)
+        self.setGeometry(50, 50, 1600, 1000)  # ウィンドウサイズ拡大
         
         # メインウィジェット
         central_widget = QWidget()
@@ -285,7 +315,7 @@ class EyeMuscleGUI(QMainWindow):
         task_layout.addWidget(QLabel("タスクID:"))
         self.task_id_spin = QSpinBox()
         self.task_id_spin.setRange(1, 999)
-        self.task_id_spin.setValue(102)
+        self.task_id_spin.setValue(119)  # Dataset119をデフォルトに
         task_layout.addWidget(self.task_id_spin)
         model_layout.addLayout(task_layout)
         
@@ -349,28 +379,53 @@ class EyeMuscleGUI(QMainWindow):
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
         
-        # 体積テーブル
+        # 表示設定グループ
+        display_group = QGroupBox("表示設定")
+        display_layout = QVBoxLayout()
+        
+        # ラベル表示チェックボックス
+        self.show_labels_checkbox = QCheckBox("画像上にラベル名を表示")
+        self.show_labels_checkbox.setChecked(True)
+        self.show_labels_checkbox.stateChanged.connect(self.on_show_labels_changed)
+        display_layout.addWidget(self.show_labels_checkbox)
+        
+        display_group.setLayout(display_layout)
+        layout.addWidget(display_group)
+        
+        # 筋肉の順序と色定義（凡例順）
+        self.muscle_order = [
+            ("so", "上斜筋", "#FF0000"),  # 赤
+            ("io", "下斜筋", "#00FF00"),  # 緑
+            ("sr", "上直筋", "#0000FF"),  # 青
+            ("ir", "下直筋", "#FFFF00"),  # 黄
+            ("lr", "外直筋", "#FF00FF"),  # マゼンタ
+            ("mr", "内直筋", "#00FFFF"),  # シアン
+        ]
+        
+        # 体積ツリー（凡例統合版）
         volume_group = QGroupBox("筋肉の体積 (mm³)")
         volume_layout = QVBoxLayout()
         
-        self.volume_table = QTableWidget()
-        self.volume_table.setColumnCount(2)
-        self.volume_table.setHorizontalHeaderLabels(["筋肉", "体積 (mm³)"])
-        self.volume_table.horizontalHeader().setStretchLastSection(True)
-        volume_layout.addWidget(self.volume_table)
+        self.volume_tree = QTreeWidget()
+        self.volume_tree.setHeaderLabels(["筋肉", "体積 (mm³)"])
+        self.volume_tree.setColumnCount(2)
+        self.volume_tree.header().setStretchLastSection(True)
+        self.volume_tree.setIndentation(20)
+        volume_layout.addWidget(self.volume_tree)
         
         volume_group.setLayout(volume_layout)
         layout.addWidget(volume_group)
         
-        # 面積テーブル（現在のスライス）
+        # 面積ツリー（現在のスライス）
         area_group = QGroupBox("現在のスライスの面積 (mm²)")
         area_layout = QVBoxLayout()
         
-        self.area_table = QTableWidget()
-        self.area_table.setColumnCount(2)
-        self.area_table.setHorizontalHeaderLabels(["筋肉", "面積 (mm²)"])
-        self.area_table.horizontalHeader().setStretchLastSection(True)
-        area_layout.addWidget(self.area_table)
+        self.area_tree = QTreeWidget()
+        self.area_tree.setHeaderLabels(["筋肉", "面積 (mm²)"])
+        self.area_tree.setColumnCount(2)
+        self.area_tree.header().setStretchLastSection(True)
+        self.area_tree.setIndentation(20)
+        area_layout.addWidget(self.area_tree)
         
         area_group.setLayout(area_layout)
         layout.addWidget(area_group)
@@ -385,22 +440,37 @@ class EyeMuscleGUI(QMainWindow):
         layout = QVBoxLayout()
         panel.setLayout(layout)
         
-        # タイトル
+        # タイトルとスライス情報
+        header_layout = QHBoxLayout()
         title = QLabel("予測結果")
-        title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("font-size: 16px; font-weight: bold;")
-        layout.addWidget(title)
-        
-        # スライス情報
+        header_layout.addWidget(title)
+        header_layout.addStretch()
         self.slice_info_label = QLabel("スライス: - / -")
-        self.slice_info_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.slice_info_label)
+        header_layout.addWidget(self.slice_info_label)
+        layout.addLayout(header_layout)
         
-        # 画像表示ラベル
-        self.image_label = QLabel()
+        # ズームスライダー
+        zoom_layout = QHBoxLayout()
+        zoom_layout.addWidget(QLabel("ズーム:"))
+        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider.setRange(50, 200)  # 50% ~ 200%
+        self.zoom_slider.setValue(100)
+        self.zoom_slider.setTickPosition(QSlider.TicksBelow)
+        self.zoom_slider.setTickInterval(25)
+        self.zoom_slider.valueChanged.connect(self.on_zoom_changed)
+        zoom_layout.addWidget(self.zoom_slider)
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setMinimumWidth(40)
+        zoom_layout.addWidget(self.zoom_label)
+        layout.addLayout(zoom_layout)
+        
+        # 画像表示ラベル（スクロール対応）
+        self.image_label = ScrollableImageLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setStyleSheet("border: 1px solid #ccc;")
-        self.image_label.setMinimumSize(600, 600)
+        self.image_label.setStyleSheet("border: 1px solid #ccc; background-color: #1a1a1a;")
+        self.image_label.setMinimumSize(700, 700)  # サイズ拡大
+        self.image_label.wheel_scrolled.connect(self.on_image_wheel_scrolled)
         layout.addWidget(self.image_label)
         
         # スライススライダー
@@ -463,11 +533,16 @@ class EyeMuscleGUI(QMainWindow):
         self.prediction_thread.error.connect(self.on_prediction_error)
         self.prediction_thread.start()
     
-    def on_prediction_finished(self, visualized_slices, slice_areas, volumes):
+    def on_prediction_finished(self, visualized_slices, slice_areas, volumes, image_array, pred_array, spacing):
         """予測完了時の処理"""
         self.visualized_slices = visualized_slices
         self.slice_areas = slice_areas
         self.volumes = volumes
+        
+        # 動的再描画用のデータを保持
+        self.image_array = image_array
+        self.pred_array = pred_array
+        self.spacing = spacing
         
         # スライダーを設定
         num_slices = len(visualized_slices)
@@ -479,8 +554,8 @@ class EyeMuscleGUI(QMainWindow):
         self.current_slice_idx = num_slices // 2
         self.update_display()
         
-        # 体積テーブルを更新
-        self.update_volume_table(volumes)
+        # 体積ツリーを更新
+        self.update_volume_tree(volumes)
         
         # UIを有効化
         self.predict_btn.setEnabled(True)
@@ -503,6 +578,56 @@ class EyeMuscleGUI(QMainWindow):
         self.current_slice_idx = value
         self.update_display()
     
+    def on_show_labels_changed(self, state):
+        """ラベル表示切り替え時の処理"""
+        self.show_labels = (state == Qt.Checked)
+        
+        # 現在のスライスを再描画
+        if self.image_array is not None and self.predictor is not None:
+            self.redraw_current_slice()
+    
+    def on_zoom_changed(self, value):
+        """ズームスライダー変更時の処理"""
+        self.zoom_level = value
+        self.zoom_label.setText(f"{value}%")
+        
+        # 現在のスライスを再描画
+        if self.image_array is not None and self.predictor is not None:
+            self.redraw_current_slice()
+        elif self.visualized_slices is not None:
+            img = self.visualized_slices[self.current_slice_idx]
+            self.display_image(img)
+    
+    def redraw_current_slice(self):
+        """現在のスライスをラベル設定に応じて再描画"""
+        if self.image_array is None or self.pred_array is None:
+            return
+        
+        img_slice = self.image_array[self.current_slice_idx]
+        pred_slice = self.pred_array[self.current_slice_idx]
+        
+        vis_img, _ = self.predictor.visualize_slice(
+            img_slice, pred_slice, self.spacing, show_labels=self.show_labels
+        )
+        self.display_image(vis_img)
+    
+    def on_image_wheel_scrolled(self, delta):
+        """画像上でのマウスホイールスクロール時の処理"""
+        if self.visualized_slices is None:
+            return
+        
+        if delta > 0:
+            # 上にスクロール（次のスライス）
+            new_idx = min(self.current_slice_idx + 1, len(self.visualized_slices) - 1)
+        else:
+            # 下にスクロール（前のスライス）
+            new_idx = max(self.current_slice_idx - 1, 0)
+        
+        if new_idx != self.current_slice_idx:
+            self.current_slice_idx = new_idx
+            self.slice_slider.setValue(new_idx)
+            self.update_display()
+    
     def update_display(self):
         """画像と面積テーブルを更新"""
         if self.visualized_slices is None:
@@ -514,46 +639,116 @@ class EyeMuscleGUI(QMainWindow):
             f"スライス: {self.current_slice_idx + 1} / {total_slices}"
         )
         
-        # 画像を表示
-        img = self.visualized_slices[self.current_slice_idx]
-        self.display_image(img)
+        # 画像を表示（ラベル設定に応じて再描画）
+        if self.image_array is not None and self.predictor is not None:
+            self.redraw_current_slice()
+        else:
+            img = self.visualized_slices[self.current_slice_idx]
+            self.display_image(img)
         
-        # 面積テーブルを更新
+        # 面積ツリーを更新
         areas = self.slice_areas.get(self.current_slice_idx, {})
-        self.update_area_table(areas)
+        self.update_area_tree(areas)
     
     def display_image(self, img):
-        """画像を表示"""
+        """画像を表示（ズームレベル対応）"""
         # NumPy配列をQImageに変換
         height, width, channel = img.shape
         bytes_per_line = 3 * width
         q_img = QImage(img.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
         
-        # QPixmapに変換してスケーリング
+        # QPixmapに変換してズームレベルに応じたサイズでスケーリング
         pixmap = QPixmap.fromImage(q_img)
+        base_size = 700  # 基準サイズ
+        target_size = int(base_size * self.zoom_level / 100)
         scaled_pixmap = pixmap.scaled(
-            self.image_label.size(), 
+            target_size, target_size,
             Qt.KeepAspectRatio, 
             Qt.SmoothTransformation
         )
         
         self.image_label.setPixmap(scaled_pixmap)
     
-    def update_area_table(self, label_areas):
-        """面積テーブルを更新"""
-        self.area_table.setRowCount(len(label_areas))
+    def update_area_tree(self, label_areas):
+        """面積ツリーを更新（凡例順、色付き、左右合算表示 + 展開で個別表示）"""
+        self.area_tree.clear()
         
-        for i, (label, area) in enumerate(sorted(label_areas.items())):
-            self.area_table.setItem(i, 0, QTableWidgetItem(label))
-            self.area_table.setItem(i, 1, QTableWidgetItem(f"{area:.2f}"))
+        # 筋肉名ごとにグループ化
+        muscle_groups = {}
+        for label, area in label_areas.items():
+            parts = label.split('_')
+            if len(parts) == 2:
+                side, muscle = parts
+                if muscle not in muscle_groups:
+                    muscle_groups[muscle] = {}
+                muscle_groups[muscle][side] = area
+        
+        # 凡例順でツリーアイテムを作成
+        for muscle_key, muscle_name_jp, color in self.muscle_order:
+            if muscle_key not in muscle_groups:
+                continue
+            
+            sides = muscle_groups[muscle_key]
+            total_area = sum(sides.values())
+            
+            # 親アイテム（合算値）- 色付きアイコン
+            parent = QTreeWidgetItem([f"■ {muscle_key} ({muscle_name_jp})", f"{total_area:.2f}"])
+            parent.setForeground(0, self._get_brush_from_color(color))
+            
+            # 子アイテム（左右個別）
+            for side in ['l', 'r']:
+                if side in sides:
+                    side_name = "左 (L)" if side == 'l' else "右 (R)"
+                    child = QTreeWidgetItem([f"    {side_name}", f"{sides[side]:.2f}"])
+                    parent.addChild(child)
+            
+            self.area_tree.addTopLevelItem(parent)
+        
+        # 列幅を調整
+        self.area_tree.resizeColumnToContents(0)
     
-    def update_volume_table(self, volumes):
-        """体積テーブルを更新"""
-        self.volume_table.setRowCount(len(volumes))
+    def update_volume_tree(self, volumes):
+        """体積ツリーを更新（凡例順、色付き、左右合算表示 + 展開で個別表示）"""
+        self.volume_tree.clear()
         
-        for i, (label, volume) in enumerate(sorted(volumes.items())):
-            self.volume_table.setItem(i, 0, QTableWidgetItem(label))
-            self.volume_table.setItem(i, 1, QTableWidgetItem(f"{volume:.2f}"))
+        # 筋肉名ごとにグループ化
+        muscle_groups = {}
+        for label, volume in volumes.items():
+            parts = label.split('_')
+            if len(parts) == 2:
+                side, muscle = parts
+                if muscle not in muscle_groups:
+                    muscle_groups[muscle] = {}
+                muscle_groups[muscle][side] = volume
+        
+        # 凡例順でツリーアイテムを作成
+        for muscle_key, muscle_name_jp, color in self.muscle_order:
+            if muscle_key not in muscle_groups:
+                continue
+            
+            sides = muscle_groups[muscle_key]
+            total_volume = sum(sides.values())
+            
+            # 親アイテム（合算値）- 色付きアイコン
+            parent = QTreeWidgetItem([f"■ {muscle_key} ({muscle_name_jp})", f"{total_volume:.2f}"])
+            parent.setForeground(0, self._get_brush_from_color(color))
+            
+            # 子アイテム（左右個別）
+            for side in ['l', 'r']:
+                if side in sides:
+                    side_name = "左 (L)" if side == 'l' else "右 (R)"
+                    child = QTreeWidgetItem([f"    {side_name}", f"{sides[side]:.2f}"])
+                    parent.addChild(child)
+            
+            self.volume_tree.addTopLevelItem(parent)
+        
+        # 列幅を調整
+        self.volume_tree.resizeColumnToContents(0)
+    
+    def _get_brush_from_color(self, hex_color):
+        """16進カラーコードからQBrushを生成"""
+        from PyQt5.QtGui import QBrush, QColor
+        return QBrush(QColor(hex_color))
 
 
 
