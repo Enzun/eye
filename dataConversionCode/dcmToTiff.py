@@ -68,7 +68,7 @@ with open(os.path.join(ex_dir, "data.txt"), "r", encoding="utf-8") as f:
             # print(folder_name)
 
         # SEフォルダ内の画像を取得するためにパスを構築
-        se_dir_path = os.path.join(ex_dir, folder_name, se)
+        se_dir_path = os.path.join(ex_dir, "DATA",folder_name, se)
         
         if not os.path.exists(se_dir_path):
             print(f"Directory not found: {se_dir_path}")

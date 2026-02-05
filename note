@@ -1,7 +1,9 @@
 # データをUSBで取り込む
 # C:/imageProcessing/DATAに入れる C:/imageProcessing/DATA/{y_m_d}
+
 python dataConversionCode/DATA2data.py
 # C:/imageProcessing/data_sort/{y_m_d}/に {hash(ID+date+time)+EX}フォルダが保存される。txtとDICOMDIRも
+
 python dataConversionCode/dcmToTiff.py
 # data_Tiff/{series}/に{hash(ID+Date+time)+EX+SE+IMG}でたくさん保存される
 
@@ -42,15 +44,15 @@ python codes/train_nnunet.py --task_id {119} --mode train --configuration 2d --f
 ; でログ確認
 
 # 推論用Tiff->Nifti
-python dataConversionCode/tiff_to_nifti_inference.py --input {"C:/Users/mitae/workspace/imageProcessing/DATA/Tiffs/T1W_SE_cor"} --output inference_input
+python dataConversionCode/tiff_to_nifti_inference.py --input "C:/imageProcessing/data_Tiff/eT1W_SE_cor" --output inference_input
 
 # 予測
 python codes/train_nnunet.py --mode predict --task_id {119} --input_folder inference_input
 ;   C:/Users/mitae/workspace/Tom500/TOM500/train/image
 =========================================
 # -> Predict Phase
-eyeMuscleGUI.py で予測
-Niftiファイルを選択 # 後でDICOM直接選択できるようにする。
+C:\imageProcessing\HospitalMuscleApp\gui\MuscleGUI.pyで予測
+病院でDicom読み込めるかどうか
 
 # ここはつなげる
 
