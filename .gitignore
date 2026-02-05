@@ -1,13 +1,24 @@
+# データフォルダ
 Data/
 data_sort/
 data_Tiff/
 annotated_data/
 runs/
 inference_input/
+
+# nnU-Net（モデルは大きいので手動でコピー）
 nnUNet_raw/
 nnUNet_preprocessed/
 nnUNet_results/
 nnUNet_predictions/
+
+# 環境設定
 .env
 __pycache__/
 *.pyc
+
+# HospitalMuscleApp ビルド関連
+HospitalMuscleApp/build/
+HospitalMuscleApp/dist/
+HospitalMuscleApp/output/
+HospitalMuscleApp/manual_review/
