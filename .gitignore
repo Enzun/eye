@@ -18,7 +18,6 @@ __pycache__/
 *.pyc
 
 # HospitalMuscleApp ビルド関連
-HospitalMuscleApp/build/
-HospitalMuscleApp/dist/
-HospitalMuscleApp/output/
-HospitalMuscleApp/manual_review/
+HospitalMuscleAppExe/
+
+HospitalMusclePortable/python311/
