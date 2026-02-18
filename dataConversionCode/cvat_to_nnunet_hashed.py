@@ -29,7 +29,7 @@ TASK_NAME = "EyeMuscleSegmentation"
 TASK_FOLDER_NAME = f"Dataset{TASK_ID:03d}_{TASK_NAME}"
 
 # 入力データのパス
-CVAT_JSON_DIR = os.path.join(PROJECT_ROOT, "annotated_data", "cvat_output", SERIES_NAME, "default")  # CVATから出力したJSONファイルがある場所
+CVAT_JSON_DIR = os.path.join(PROJECT_ROOT, "annotated_data", SERIES_NAME)  # 出力したJSONファイルがある場所
 TIFF_IMAGE_DIR = os.path.join(PROJECT_ROOT, "data_Tiff", SERIES_NAME)  # 対応するTIFF画像がある場所
 
 # nnU-Net用の出力先

@@ -402,11 +402,15 @@ class AnnotationTool(QMainWindow):
         # プロジェクトルート（annotation_tool.pyの2つ上）
         self.project_root = Path(__file__).parent.parent
         self.annotated_data_dir = self.project_root / "annotated_data"
+        self.data_input_dir = self.project_root / "data_input" / "tiff"
         
         # ズーム維持設定
         self.maintain_zoom_on_switch = True
         
         self.init_ui()
+        
+        # 起動時にシリーズを自動スキャン
+        self.scan_series()
     
     def init_ui(self):
         """UIを初期化"""
@@ -442,19 +446,27 @@ class AnnotationTool(QMainWindow):
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(title)
         
-        # ファイル選択グループ
-        file_group = QGroupBox("ファイル操作")
+        # シリーズ選択グループ
+        series_group = QGroupBox("シリーズ選択")
+        series_layout = QVBoxLayout()
+        
+        self.series_list = QListWidget()
+        self.series_list.itemClicked.connect(self.on_series_selected)
+        self.series_list.setMaximumHeight(150)
+        series_layout.addWidget(self.series_list)
+        
+        self.refresh_btn = QPushButton("🔄 更新")
+        self.refresh_btn.clicked.connect(self.scan_series)
+        series_layout.addWidget(self.refresh_btn)
+        
+        series_group.setLayout(series_layout)
+        layout.addWidget(series_group)
+        
+        # ファイル情報・ナビゲーション
+        file_group = QGroupBox("ファイル")
         file_layout = QVBoxLayout()
         
-        self.select_folder_btn = QPushButton("フォルダを選択")
-        self.select_folder_btn.clicked.connect(self.select_folder)
-        file_layout.addWidget(self.select_folder_btn)
-        
-        self.select_file_btn = QPushButton("単一ファイルを選択")
-        self.select_file_btn.clicked.connect(self.select_single_file)
-        file_layout.addWidget(self.select_file_btn)
-        
-        self.file_label = QLabel("ファイル: 未選択")
+        self.file_label = QLabel("シリーズを選択してください")
         self.file_label.setWordWrap(True)
         file_layout.addWidget(self.file_label)
         
@@ -621,30 +633,88 @@ class AnnotationTool(QMainWindow):
         elif key == Qt.Key_Delete:
             self.delete_annotation()
     
-    def select_folder(self):
-        """フォルダを選択してTIFFファイル一覧を取得"""
-        folder = QFileDialog.getExistingDirectory(self, "TIFFフォルダを選択")
+    def scan_series(self):
+        """data_input/tiff/ をスキャンしてシリーズ一覧を表示"""
+        self.series_list.clear()
         
-        if folder:
-            self.work_dir = Path(folder)
-            self.series_name = self.work_dir.name  # シリーズ名 = 親フォルダ名
+        if not self.data_input_dir.exists():
+            self.data_input_dir.mkdir(parents=True, exist_ok=True)
+            self.statusBar().showMessage("data_input/tiff/ フォルダを作成しました", 3000)
+            return
+        
+        # サブフォルダを検索（TIFFファイルを含むもののみ）
+        series_folders = []
+        for folder in sorted(self.data_input_dir.iterdir()):
+            if folder.is_dir():
+                tiff_count = len(list(folder.glob("*.tiff")) + list(folder.glob("*.tif")))
+                if tiff_count > 0:
+                    series_folders.append((folder.name, tiff_count))
+        
+        if not series_folders:
+            self.series_list.addItem("（TIFFフォルダが見つかりません）")
+            self.statusBar().showMessage(
+                f"data_input/tiff/ にTIFFフォルダを配置してください", 5000)
+            return
+        
+        # アノテーション済みの進捗も表示
+        for series_name, tiff_count in series_folders:
+            # アノテーション済みファイル数をカウント
+            json_dir = self.annotated_data_dir / series_name
+            annotated_count = 0
+            if json_dir.exists():
+                for json_file in json_dir.glob("*.json"):
+                    try:
+                        with open(json_file, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        if data.get('shapes', []):
+                            annotated_count += 1
+                    except:
+                        pass
             
-            # TIFFファイルを検索
-            self.file_list = sorted(list(self.work_dir.glob("*.tiff")) + 
-                                   list(self.work_dir.glob("*.tif")))
+            if annotated_count > 0:
+                item_text = f"📁 {series_name}  ({tiff_count}枚, {annotated_count}済)"
+            else:
+                item_text = f"📁 {series_name}  ({tiff_count}枚)"
             
-            if not self.file_list:
-                QMessageBox.warning(self, "警告", "TIFFファイルが見つかりません")
-                return
-            
-            # 全TIFFファイルに対応するJSONを事前作成
-            self.create_json_files_for_all()
-            
-            self.current_file_index = 0
-            self.load_current_file()
-            
-            self.prev_btn.setEnabled(True)
-            self.next_btn.setEnabled(True)
+            item = QListWidgetItem(item_text)
+            item.setData(Qt.UserRole, series_name)  # フォルダ名を保持
+            self.series_list.addItem(item)
+        
+        self.statusBar().showMessage(
+            f"{len(series_folders)}個のシリーズを検出", 3000)
+    
+    def on_series_selected(self, item):
+        """シリーズがクリックされたときの処理"""
+        series_name = item.data(Qt.UserRole)
+        if series_name is None:
+            return  # 「見つかりません」メッセージの場合
+        
+        # 現在のアノテーションを保存
+        if self.file_list:
+            self.auto_save_json()
+        
+        self.series_name = series_name
+        self.work_dir = self.data_input_dir / series_name
+        
+        # TIFFファイルを検索
+        self.file_list = sorted(list(self.work_dir.glob("*.tiff")) + 
+                               list(self.work_dir.glob("*.tif")))
+        
+        if not self.file_list:
+            QMessageBox.warning(self, "警告", "TIFFファイルが見つかりません")
+            return
+        
+        # 全TIFFファイルに対応するJSONを事前作成
+        self.create_json_files_for_all()
+        
+        self.current_file_index = 0
+        self.load_current_file()
+        
+        self.prev_btn.setEnabled(True)
+        self.next_btn.setEnabled(True)
+        
+        self.statusBar().showMessage(
+            f"シリーズ「{series_name}」を読み込みました ({len(self.file_list)}枚)", 3000)
     
     def get_json_save_dir(self):
         """JSONの保存先ディレクトリを取得（annotated_data/{series_name}/）"""
@@ -687,24 +757,6 @@ class AnnotationTool(QMainWindow):
         
         if created_count > 0:
             self.statusBar().showMessage(f"{created_count}個のJSONを {json_dir} に作成", 3000)
-    
-    def select_single_file(self):
-        """単一ファイルを選択"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "TIFFファイルを選択", "", 
-            "TIFF Files (*.tiff *.tif);;All Files (*.*)"
-        )
-        
-        if file_path:
-            self.work_dir = Path(file_path).parent
-            self.series_name = self.work_dir.name  # シリーズ名 = 親フォルダ名
-            self.file_list = [Path(file_path)]
-            self.current_file_index = 0
-            
-            # JSONファイルを事前作成
-            self.create_json_files_for_all()
-            
-            self.load_current_file()
     
     def load_current_file(self):
         """現在のファイルを読み込み"""

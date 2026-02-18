@@ -86,23 +86,32 @@ class ResultManager:
         filepath = self.predictions_dir / filename
         return filepath.exists()
     
-    def append_to_csv(self, folder_name, volumes):
+    def append_to_csv(self, folder_name, volumes, max_areas=None):
         """
         測定値をCSVに追記（1行 = 1検査）
         
         Args:
             folder_name: DICOMフォルダ名 (例: EX100SE3)
             volumes: {label: volume} の辞書 (例: {"l_sr": 123.45, "r_sr": 130.20})
+            max_areas: {label: max_area} の辞書（各筋肉の最大断面積 cm²）
         
         CSV形式:
-            folder_name, timestamp, r_ir, l_ir, r_mr, l_mr, r_sr, l_sr, r_so, l_so, r_lr, l_lr, r_io, l_io
+            folder_name, timestamp, 
+            r_ir, l_ir, ... (体積 cm³),
+            r_ir_area, l_ir_area, ... (最大面積 cm²)
         
         Raises:
             PermissionError: ファイルがExcel等で開かれている場合
         """
+        if max_areas is None:
+            max_areas = {}
+        
         file_exists = self.csv_file.exists()
         
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # 最大面積のヘッダー用ラベル
+        area_labels = [f"{label}_area" for label in self.MUSCLE_LABELS]
         
         try:
             with open(self.csv_file, 'a', newline='', encoding='utf-8') as f:
@@ -110,7 +119,7 @@ class ResultManager:
                 
                 # 新規ファイルの場合はヘッダーを書き込み
                 if not file_exists:
-                    header = ["folder_name", "timestamp"] + self.MUSCLE_LABELS
+                    header = ["folder_name", "timestamp"] + self.MUSCLE_LABELS + area_labels
                     writer.writerow(header)
                 
                 # 各筋肉の体積を順番に取得（ないものは空文字）
@@ -118,6 +127,13 @@ class ResultManager:
                 for label in self.MUSCLE_LABELS:
                     if label in volumes:
                         row.append(f"{volumes[label]:.2f}")
+                    else:
+                        row.append("")
+                
+                # 各筋肉の最大面積を順番に取得（ないものは空文字）
+                for label in self.MUSCLE_LABELS:
+                    if label in max_areas:
+                        row.append(f"{max_areas[label]:.2f}")
                     else:
                         row.append("")
                 

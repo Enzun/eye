@@ -17,7 +17,11 @@ nnUNet_predictions/
 __pycache__/
 *.pyc
 
-# HospitalMuscleApp ビルド関連
-HospitalMuscleAppExe/
-
-HospitalMusclePortable/python311/
+# ポータブル版の除外設定
+**/python311/
+**/data_input/
+**/annotated_data/
+**/output/
+**/manual_review/
+*.exe
+vc_redist*.exe

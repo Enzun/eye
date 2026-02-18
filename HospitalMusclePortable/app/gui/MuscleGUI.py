@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QTableWidget, QTableWidgetItem,
     QGroupBox, QSpinBox, QComboBox, QMessageBox, QProgressBar, QSlider,
-    QTreeWidget, QTreeWidgetItem, QCheckBox, QFrame
+    QTreeWidget, QTreeWidgetItem, QCheckBox, QFrame, QProgressDialog
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QPixmap, QImage
@@ -47,12 +47,12 @@ def setup_nnunet_env():
         # exe化された場合、バンドルされたモデルを使用
         nnunet_results = app_path / 'nnUNet_results'
     else:
-        # 通常実行時は親の親ディレクトリ（imageProcessing）を参照
-        nnunet_results = app_path.parent / 'nnUNet_results'
+        # 通常実行時はappディレクトリ内のnnUNet_resultsを使用
+        nnunet_results = app_path / 'nnUNet_results'
     
     os.environ['nnUNet_results'] = str(nnunet_results)
-    os.environ['nnUNet_raw'] = str(nnunet_results.parent / 'nnUNet_raw')
-    os.environ['nnUNet_preprocessed'] = str(nnunet_results.parent / 'nnUNet_preprocessed')
+    os.environ['nnUNet_raw'] = str(app_path / 'nnUNet_raw')
+    os.environ['nnUNet_preprocessed'] = str(app_path / 'nnUNet_preprocessed')
     
     print(f"nnUNet_results (新規設定): {os.environ.get('nnUNet_results')}")
 
@@ -548,6 +548,20 @@ class MuscleSegmentationGUI(QMainWindow):
         if not self.current_dicom_folder:
             return
         
+        # 既存の予測があるか確認
+        if self.result_manager.has_saved_prediction(self.current_folder_name):
+            reply = QMessageBox.question(
+                self, "過去の予測データ",
+                f"フォルダ '{self.current_folder_name}' の予測データが既に存在します。\n"
+                "既存のデータを使用しますか？\n"
+                "（'No'を選択すると再予測します）",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+            )
+            
+            if reply == QMessageBox.Yes:
+                self.load_existing_prediction()
+                return
+        
         # UIを無効化
         self.predict_btn.setEnabled(False)
         self.select_folder_btn.setEnabled(False)
@@ -573,6 +587,73 @@ class MuscleSegmentationGUI(QMainWindow):
         except Exception as e:
             self._cleanup_temp_dir()
             self.on_prediction_error(str(e))
+    
+    def load_existing_prediction(self):
+        """既存の予測データを読み込む"""
+        try:
+            # DICOMをNIfTIに変換（元画像用）
+            sitk_image, folder_name = convert_dicom_folder_to_nifti(self.current_dicom_folder)
+            image_array = sitk.GetArrayFromImage(sitk_image)
+            spacing = sitk_image.GetSpacing()
+            
+            # 予測マスクを読み込み
+            result = self.result_manager.load_prediction_nifti(self.current_folder_name)
+            if result is None:
+                raise FileNotFoundError("予測データの読み込みに失敗しました")
+            
+            pred_array, pred_spacing = result
+            
+            # 視覚化と計算（スレッドを使わずにメインスレッドで実行しても良いが、重い場合はスレッド推奨）
+            # ここでは既存の処理フローに合わせるため、CalculationThreadを作って回すのが綺麗だが、
+            # 簡易的にメインスレッドで計算して表示する
+            
+            num_slices = image_array.shape[0]
+            visualized_slices = []
+            slice_areas = {}
+            volumes = {}
+            
+            # 進捗表示用
+            progress = QProgressDialog("データを読み込み中...", "キャンセル", 0, num_slices, self)
+            progress.setWindowModality(Qt.WindowModal)
+            
+            for i in range(num_slices):
+                if progress.wasCanceled():
+                    return
+                progress.setValue(i)
+                
+                img_slice = image_array[i]
+                if i < pred_array.shape[0]:
+                    pred_slice = pred_array[i]
+                else:
+                    pred_slice = np.zeros_like(img_slice)
+                
+                vis_img, areas = self.predictor.visualize_slice(img_slice, pred_slice, spacing)
+                visualized_slices.append(vis_img)
+                slice_areas[i] = areas
+            
+            progress.setValue(num_slices)
+            
+            # 体積計算
+            slice_thickness_mm = spacing[2]
+            slice_thickness_cm = slice_thickness_mm / 10
+            
+            for label_id, label_name in self.predictor.label_names.items():
+                for side in ['l', 'r']:
+                    side_label = f"{side}_{label_name}"
+                    total_volume = 0
+                    for slice_idx, areas in slice_areas.items():
+                        if side_label in areas:
+                            total_volume += areas[side_label] * slice_thickness_cm
+                    if total_volume > 0:
+                        volumes[side_label] = total_volume
+            
+            # 結果表示
+            self.on_prediction_finished(
+                visualized_slices, slice_areas, volumes, image_array, pred_array, spacing
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"既存データの読み込みに失敗しました:\n{str(e)}")
     
     def _cleanup_temp_dir(self):
         """一時ディレクトリをクリーンアップ"""
@@ -645,10 +726,14 @@ class MuscleSegmentationGUI(QMainWindow):
                 self.spacing
             )
             
+            # 各筋肉の最大面積を計算
+            max_areas = self._calculate_max_areas()
+            
             # CSV追記（1行 = 1検査）
             csv_path = self.result_manager.append_to_csv(
                 self.current_folder_name,
-                self.volumes
+                self.volumes,
+                max_areas
             )
             
             QMessageBox.information(self, "保存完了", 
@@ -663,6 +748,21 @@ class MuscleSegmentationGUI(QMainWindow):
         except Exception as e:
             import traceback
             QMessageBox.critical(self, "エラー", f"保存に失敗しました:\n{str(e)}\n\n{traceback.format_exc()}")
+    
+    def _calculate_max_areas(self):
+        """各筋肉の最大断面積を計算（slice_areasから）"""
+        if not self.slice_areas:
+            return {}
+        
+        max_areas = {}
+        
+        # 全スライスを走査して各筋肉の最大面積を取得
+        for slice_idx, areas in self.slice_areas.items():
+            for label, area in areas.items():
+                if label not in max_areas or area > max_areas[label]:
+                    max_areas[label] = area
+        
+        return max_areas
     
     def mark_for_review(self):
         """手動レビューリストに追加"""
