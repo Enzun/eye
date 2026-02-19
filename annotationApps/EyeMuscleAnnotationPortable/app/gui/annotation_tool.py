@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
     QRadioButton, QButtonGroup, QMessageBox, QScrollArea, QListWidgetItem,
     QCheckBox, QSlider
 )
-from PyQt5.QtCore import Qt, QPoint, QRect, QPointF
+from PyQt5.QtCore import Qt, QPoint, QRect, QPointF, QSize, QTimer
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QPolygon, QTransform, QPolygonF, QBrush
 from PIL import Image
 import numpy as np
@@ -573,7 +573,7 @@ class AnnotationTool(QMainWindow):
         
         self.series_list = QListWidget()
         self.series_list.itemClicked.connect(self.on_series_selected)
-        self.series_list.setMaximumHeight(150)
+        self.series_list.setFixedHeight(90)  # 約3アイテム分の高さ
         series_layout.addWidget(self.series_list)
         
         self.refresh_btn = QPushButton("🔄 更新")
@@ -587,9 +587,19 @@ class AnnotationTool(QMainWindow):
         file_group = QGroupBox("ファイル")
         file_layout = QVBoxLayout()
         
+        # ファイル名 + 枚数カウンター + 最後へボタン
+        file_info_layout = QHBoxLayout()
         self.file_label = QLabel("シリーズを選択してください")
         self.file_label.setWordWrap(True)
-        file_layout.addWidget(self.file_label)
+        file_info_layout.addWidget(self.file_label, 1)
+        
+        self.jump_last_btn = QPushButton("最後へ")
+        self.jump_last_btn.setToolTip("アノテーション済みの最後のスライスへ移動")
+        self.jump_last_btn.clicked.connect(self.jump_to_last_annotated)
+        self.jump_last_btn.setEnabled(False)
+        self.jump_last_btn.setFixedWidth(75)
+        file_info_layout.addWidget(self.jump_last_btn)
+        file_layout.addLayout(file_info_layout)
         
         # ナビゲーションボタン
         nav_layout = QHBoxLayout()
@@ -660,34 +670,17 @@ class AnnotationTool(QMainWindow):
         label_group.setLayout(label_layout)
         layout.addWidget(label_group)
         
-        # 描画操作ボタン
-        draw_layout = QHBoxLayout()
-        
-        self.finish_btn = QPushButton("ポリゴン完成")
-        self.finish_btn.clicked.connect(self.canvas.finish_polygon)
-        draw_layout.addWidget(self.finish_btn)
-        
-        self.clear_current_btn = QPushButton("描画クリア")
-        self.clear_current_btn.clicked.connect(self.canvas.clear_current_polygon)
-        draw_layout.addWidget(self.clear_current_btn)
-        
-        layout.addLayout(draw_layout)
-        
-        # ラベル別クリアボタン
-        self.clear_label_btn = QPushButton("選択ラベルをクリア")
-        self.clear_label_btn.clicked.connect(self.clear_current_label_annotations)
-        self.clear_label_btn.setStyleSheet("background-color: #c62828;")
-        layout.addWidget(self.clear_label_btn)
-        
-        # アノテーションリスト（大きく表示）
+        # アノテーション一覧（縦リスト、ラベル色付き、横幅いっぱい）
         anno_group = QGroupBox("アノテーション一覧")
         anno_layout = QVBoxLayout()
+        anno_layout.setContentsMargins(4, 4, 4, 4)
         
         self.annotation_list = QListWidget()
         self.annotation_list.itemClicked.connect(self.on_annotation_selected)
-        anno_layout.addWidget(self.annotation_list, 1)  # stretch=1 で空きスペースを使う
+        self.annotation_list.setSpacing(1)
+        anno_layout.addWidget(self.annotation_list, 1)
         
-        self.delete_btn = QPushButton("選択を削除")
+        self.delete_btn = QPushButton("選択を削除 (Delete)")
         self.delete_btn.clicked.connect(self.delete_annotation)
         anno_layout.addWidget(self.delete_btn)
         
@@ -820,6 +813,7 @@ class AnnotationTool(QMainWindow):
         
         self.prev_btn.setEnabled(True)
         self.next_btn.setEnabled(True)
+        self.jump_last_btn.setEnabled(True)
         
         self.statusBar().showMessage(
             f"シリーズ「{series_name}」を読み込みました ({len(self.file_list)}枚)", 3000)
@@ -987,14 +981,24 @@ class AnnotationTool(QMainWindow):
         return self.current_muscle
     
     def update_annotation_list(self):
-        """アノテーション一覧を更新"""
+        """アノテーション一覧を更新（縦リスト、ラベル色付き）"""
         self.annotation_list.clear()
         
         for idx, annotation in enumerate(self.canvas.annotations):
             label = annotation['label']
             num_points = len(annotation['points'])
             
-            item = QListWidgetItem(f"{idx + 1}. {label} ({num_points}点)")
+            item = QListWidgetItem(f"  {idx + 1}.  {label}   ({num_points}点)")
+            
+            # ラベル色で背景を設定
+            color_tuple = self.canvas.label_colors.get(label, (80, 80, 80))
+            bg_color = QColor(*color_tuple, 180)
+            item.setBackground(QBrush(bg_color))
+            
+            # 文字色（明度に応じて白/黒）
+            luminance = 0.299 * color_tuple[0] + 0.587 * color_tuple[1] + 0.114 * color_tuple[2]
+            item.setForeground(QBrush(QColor(0, 0, 0) if luminance > 128 else QColor(255, 255, 255)))
+            
             self.annotation_list.addItem(item)
     
     def on_annotation_selected(self, item):
@@ -1041,6 +1045,112 @@ class AnnotationTool(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "エラー", f"JSON読込に失敗:\n{str(e)}")
+
+
+    def show_help_dialog(self):
+        """操作一覧を表示"""
+        help_text = """
+        <style>
+            th { text-align: left; background-color: #444; color: white; padding: 4px; }
+            td { padding: 2px 10px 2px 0; }
+        </style>
+        <table cellspacing="0" cellpadding="0">
+            <tr><th colspan="2">【マウス操作】</th></tr>
+            <tr><td>左クリック</td><td>点を追加</td></tr>
+            <tr><td>右クリック</td><td>ポリゴン完成</td></tr>
+            <tr><td>中ボタンドラッグ</td><td>パン（移動）</td></tr>
+            <tr><td>ホイール</td><td>ズーム</td></tr>
+            
+            <tr><td colspan="2" height="10"></td></tr>
+            <tr><th colspan="2">【編集モード】</th></tr>
+            <tr><td>一覧クリック</td><td>編集モード開始</td></tr>
+            <tr><td>頂点ドラッグ</td><td>頂点移動</td></tr>
+            <tr><td>空き領域クリック</td><td>編集モード終了</td></tr>
+            
+            <tr><td colspan="2" height="10"></td></tr>
+            <tr><th colspan="2">【キーボード】</th></tr>
+            <tr><td>矢印キー(←→)</td><td>画像切替</td></tr>
+            <tr><td>1-6</td><td>ラベル切替</td></tr>
+            <tr><td>Delete</td><td>選択アノテーション削除</td></tr>
+            <tr><td>Ctrl+Z</td><td>1点戻る</td></tr>
+            <tr><td>Esc</td><td>描画キャンセル</td></tr>
+        </table>
+        """
+        msg = QMessageBox(self)
+        msg.setWindowTitle("操作一覧")
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(help_text)
+        msg.exec_()
+
+    def jump_to_last_annotated(self):
+        """アノテーション済みの最後のスライスへ移動（逆順スキャン）"""
+        if not self.file_list:
+            return
+        
+        # 現在のアノテーションを保存
+        self.auto_save_json()
+        
+        # 逆順にスキャンして、アノテーションがある（shapesが空でない）最初のファイルを探す
+        target_index = -1
+        json_dir = self.get_json_save_dir()
+        
+        # プログレス表示（処理が長い場合用）
+        self.statusBar().showMessage("アノテーション済みスライスを検索中...", 0)
+        QApplication.processEvents()
+        
+        for i in range(len(self.file_list) - 1, -1, -1):
+            tiff_file = self.file_list[i]
+            # JSONファイル名を特定
+            json_file = json_dir / (tiff_file.stem + ".json")
+            
+            if json_file.exists():
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    if data.get('shapes', []):
+                        target_index = i
+                        break
+                except:
+                    pass
+        
+        if target_index != -1 and target_index != self.current_file_index:
+            self.statusBar().showMessage(f"スライス {target_index + 1} へ移動します", 2000)
+            self._slide_to_target(target_index)
+        elif target_index == self.current_file_index:
+            self.statusBar().showMessage("既に最後のアノテーション地点にいます", 2000)
+        else:
+            self.statusBar().showMessage("アノテーション済みのスライスが見つかりません", 3000)
+
+    def _slide_to_target(self, target_index):
+        """ターゲットまでスライドショー的に移動"""
+        if self.current_file_index == target_index:
+            return
+            
+        direction = 1 if target_index > self.current_file_index else -1
+        
+        # 高速で移動するためのタイマー
+        self.slide_timer = QTimer()
+        self.slide_target = target_index
+        self.slide_direction = direction
+        
+        def step():
+            # 目標に到達したら停止
+            if self.current_file_index == self.slide_target:
+                self.slide_timer.stop()
+                return
+            
+            # 次のインデックスへ
+            next_idx = self.current_file_index + self.slide_direction
+            
+            # 範囲チェック（念のため）
+            if 0 <= next_idx < len(self.file_list):
+                self.current_file_index = next_idx
+                self.load_current_file()
+            else:
+                self.slide_timer.stop()
+        
+        self.slide_timer.timeout.connect(step)
+        self.slide_timer.start(15)  # 15ms間隔（約60fps）で切り替え
 
 
 def main():
