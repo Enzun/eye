@@ -517,6 +517,355 @@ class NnUNetPredictor:
         }
         return visualized_slices, slice_areas, volumes_data, image_array, pred_array, spacing
 
+    def mask_to_polygons(self, slice_mask):
+        """2D マスク配列をポリゴンリストに変換（編集用）
+
+        Args:
+            slice_mask: (Y, X) 配列、値は 0-6（0=背景、1-6=筋肉ラベル）
+
+        Returns:
+            list of dict: [{"label": int, "label_name": str, "points": [[x,y],...], "is_hole": bool}, ...]
+        """
+        polygons = []
+
+        for label_id in [1, 2, 3, 4, 5, 6]:  # SR, IR, MR, LR, SO, IO
+            label_name = self.label_names[label_id]
+            mask = (slice_mask == label_id).astype(np.uint8)
+
+            # RETR_TREE で外側輪郭と穴の両方を取得
+            contours, hierarchy = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+            if hierarchy is None:
+                continue
+
+            # hierarchy[0][i] = [next, previous, first_child, parent]
+            # parent == -1 なら外側輪郭、parent >= 0 なら穴
+            for i, contour in enumerate(contours):
+                if len(contour) < 3:  # 3点未満は無効
+                    continue
+
+                points = contour.squeeze().tolist()
+                if isinstance(points[0], int):  # 1点のみの場合 [[x,y]] でなく [x,y] になる
+                    points = [points]
+
+                is_hole = (hierarchy[0][i][3] != -1)  # parent が -1 でなければ穴
+
+                polygons.append({
+                    "label": label_id,
+                    "label_name": label_name,
+                    "points": points,
+                    "is_hole": is_hole
+                })
+
+        return polygons
+
+    def polygons_to_mask(self, polygons, shape):
+        """ポリゴンリストを 2D マスク配列に変換（ラスタライズ）
+
+        Args:
+            polygons: mask_to_polygons() の出力形式
+            shape: (height, width) のタプル
+
+        Returns:
+            numpy.ndarray: (Y, X) 配列、値は 0-6
+        """
+        mask = np.zeros(shape, dtype=np.uint8)
+
+        # ラベルごとに処理（後のラベルが優先）
+        for label_id in [1, 2, 3, 4, 5, 6]:
+            # まず外側輪郭を描画
+            for poly in polygons:
+                if poly["label"] == label_id and not poly["is_hole"]:
+                    pts = np.array(poly["points"], dtype=np.int32)
+                    cv2.fillPoly(mask, [pts], color=label_id)
+
+            # 次に穴を背景で上書き
+            for poly in polygons:
+                if poly["label"] == label_id and poly["is_hole"]:
+                    pts = np.array(poly["points"], dtype=np.int32)
+                    cv2.fillPoly(mask, [pts], color=0)
+
+        return mask
+
+
+class EditorCanvas(QWidget):
+    """ポリゴン編集用キャンバス（MuscleGUI 専用）"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_window = parent
+
+        # 画像データ
+        self.image_array = None  # (Y, X) グレースケール
+        self.display_pixmap = None
+
+        # ポリゴンデータ
+        self.polygons = []  # [{"label": int, "label_name": str, "points": [[x,y],...], "is_hole": bool}, ...]
+        self.selected_polygon_idx = None
+        self.dragging_point_idx = None
+
+        # 現在のラベル（編集用）
+        self.current_label = 1  # 1=SR, 2=IR, 3=MR, 4=LR, 5=SO, 6=IO
+
+        # 描画中のポリゴン
+        self.current_polygon = []  # [[x, y], ...]
+
+        # ラベル色定義（RGB）
+        self.label_colors = {
+            1: (0, 0, 255),    # SR: 青
+            2: (255, 255, 0),  # IR: 黄
+            3: (0, 255, 255),  # MR: シアン
+            4: (255, 0, 255),  # LR: マゼンタ
+            5: (255, 0, 0),    # SO: 赤
+            6: (0, 255, 0),    # IO: 緑
+        }
+
+        self.setMouseTracking(True)
+        self.setMinimumSize(700, 700)
+        self.setStyleSheet("border: 2px solid #444; background-color: #1a1a1a;")
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def load_image_and_polygons(self, image_array, polygons):
+        """画像とポリゴンを読み込み
+
+        Args:
+            image_array: (Y, X) グレースケール配列
+            polygons: mask_to_polygons() の出力
+        """
+        self.image_array = image_array
+        self.polygons = polygons.copy()
+        self.selected_polygon_idx = None
+        self.current_polygon = []
+
+        # 画像を QPixmap に変換
+        img_normalized = ((image_array - image_array.min()) /
+                          (image_array.max() - image_array.min()) * 255).astype(np.uint8)
+        img_rgb = cv2.cvtColor(img_normalized, cv2.COLOR_GRAY2RGB)
+
+        height, width, _ = img_rgb.shape
+        bytes_per_line = 3 * width
+        q_img = QImage(img_rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        self.display_pixmap = QPixmap.fromImage(q_img)
+
+        self.update()
+
+    def paintEvent(self, event):
+        """キャンバス描画"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # 背景
+        painter.fillRect(self.rect(), QColor(26, 26, 26))
+
+        if self.display_pixmap is None:
+            return
+
+        # 画像を中央に表示
+        px_w = self.display_pixmap.width()
+        px_h = self.display_pixmap.height()
+        x_offset = (self.width() - px_w) // 2
+        y_offset = (self.height() - px_h) // 2
+
+        painter.drawPixmap(x_offset, y_offset, self.display_pixmap)
+
+        # ポリゴン描画
+        has_selection = self.selected_polygon_idx is not None
+
+        for idx, poly in enumerate(self.polygons):
+            if poly["is_hole"]:
+                continue  # 穴は外側輪郭と一緒に処理済み（表示時はスキップ）
+
+            label = poly["label"]
+            points = poly["points"]
+            color_tuple = self.label_colors.get(label, (128, 128, 128))
+            is_selected = (idx == self.selected_polygon_idx)
+            is_current_label = (label == self.current_label)
+
+            # 不透明度の設定
+            if is_selected:
+                # 選択中: 完全不透明
+                line_alpha = 255
+                fill_alpha = 100
+                line_width = 3
+            elif is_current_label and not has_selection:
+                # 編集中のラベル（未選択時）: 不透明
+                line_alpha = 255
+                fill_alpha = 80
+                line_width = 2
+            else:
+                # 他のラベル: 半透明
+                line_alpha = 100
+                fill_alpha = 30
+                line_width = 1
+
+            # ポリゴン描画
+            if len(points) >= 3:
+                q_points = [QPointF(x + x_offset, y + y_offset) for x, y in points]
+                polygon = QPolygonF(q_points)
+
+                painter.setBrush(QBrush(QColor(*color_tuple, fill_alpha)))
+                painter.setPen(QPen(QColor(*color_tuple, line_alpha), line_width))
+                painter.drawPolygon(polygon)
+
+                # 選択中なら頂点を表示
+                if is_selected:
+                    painter.setBrush(QBrush(QColor(255, 255, 255)))
+                    painter.setPen(QPen(QColor(*color_tuple), 2))
+                    for qp in q_points:
+                        painter.drawEllipse(qp, 4, 4)
+
+        # 描画中のポリゴン
+        if self.current_polygon:
+            color_tuple = self.label_colors.get(self.current_label, (255, 255, 255))
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(*color_tuple)))
+            for x, y in self.current_polygon:
+                painter.drawEllipse(QPointF(x + x_offset, y + y_offset), 4, 4)
+
+            # 線で繋ぐ
+            if len(self.current_polygon) > 1:
+                painter.setPen(QPen(QColor(*color_tuple), 2))
+                for i in range(len(self.current_polygon) - 1):
+                    x1, y1 = self.current_polygon[i]
+                    x2, y2 = self.current_polygon[i + 1]
+                    painter.drawLine(
+                        QPointF(x1 + x_offset, y1 + y_offset),
+                        QPointF(x2 + x_offset, y2 + y_offset)
+                    )
+
+    def screen_to_image(self, screen_x, screen_y):
+        """スクリーン座標を画像座標に変換"""
+        if self.display_pixmap is None:
+            return None, None
+
+        px_w = self.display_pixmap.width()
+        px_h = self.display_pixmap.height()
+        x_offset = (self.width() - px_w) // 2
+        y_offset = (self.height() - px_h) // 2
+
+        img_x = screen_x - x_offset
+        img_y = screen_y - y_offset
+
+        # 画像範囲外ならNone
+        if img_x < 0 or img_x >= px_w or img_y < 0 or img_y >= px_h:
+            return None, None
+
+        return img_x, img_y
+
+    def mousePressEvent(self, event):
+        """マウスボタン押下"""
+        img_x, img_y = self.screen_to_image(event.x(), event.y())
+        if img_x is None:
+            return
+
+        if event.button() == Qt.LeftButton:
+            # 選択中のポリゴンがあれば頂点ドラッグ判定
+            if self.selected_polygon_idx is not None:
+                poly = self.polygons[self.selected_polygon_idx]
+                for i, (px, py) in enumerate(poly["points"]):
+                    if abs(px - img_x) < 8 and abs(py - img_y) < 8:
+                        self.dragging_point_idx = i
+                        return
+
+            # それ以外は新規点追加
+            self.current_polygon.append([img_x, img_y])
+            self.update()
+
+        elif event.button() == Qt.RightButton:
+            # ポリゴン完成
+            if len(self.current_polygon) >= 3:
+                self.finish_polygon()
+
+    def mouseMoveEvent(self, event):
+        """マウス移動（頂点ドラッグ）"""
+        if self.dragging_point_idx is not None and self.selected_polygon_idx is not None:
+            img_x, img_y = self.screen_to_image(event.x(), event.y())
+            if img_x is not None:
+                poly = self.polygons[self.selected_polygon_idx]
+                poly["points"][self.dragging_point_idx] = [img_x, img_y]
+                self.update()
+
+    def mouseReleaseEvent(self, event):
+        """マウスボタン解放"""
+        self.dragging_point_idx = None
+
+    def mouseDoubleClickEvent(self, event):
+        """ダブルクリック（ポリゴン選択）"""
+        img_x, img_y = self.screen_to_image(event.x(), event.y())
+        if img_x is None:
+            return
+
+        # クリック位置にあるポリゴンを検索
+        for idx, poly in enumerate(self.polygons):
+            if poly["is_hole"]:
+                continue
+            points = np.array(poly["points"], dtype=np.int32)
+            if cv2.pointPolygonTest(points, (img_x, img_y), False) >= 0:
+                self.selected_polygon_idx = idx
+                self.update()
+                if self.parent_window:
+                    self.parent_window.update_polygon_list()
+                return
+
+        # 何もなければ選択解除
+        self.selected_polygon_idx = None
+        self.update()
+        if self.parent_window:
+            self.parent_window.update_polygon_list()
+
+    def keyPressEvent(self, event):
+        """キー押下"""
+        if event.key() == Qt.Key_Delete:
+            # 選択ポリゴン削除
+            if self.selected_polygon_idx is not None:
+                del self.polygons[self.selected_polygon_idx]
+                self.selected_polygon_idx = None
+                self.update()
+                if self.parent_window:
+                    self.parent_window.update_polygon_list()
+
+        elif event.key() == Qt.Key_Escape:
+            # 描画中キャンセル
+            self.current_polygon = []
+            self.update()
+
+        elif Qt.Key_1 <= event.key() <= Qt.Key_6:
+            # ラベル切替（1-6 → SR, IR, MR, LR, SO, IO）
+            self.current_label = event.key() - Qt.Key_0
+            self.update()
+
+    def finish_polygon(self):
+        """現在のポリゴンを完成させる"""
+        if len(self.current_polygon) < 3:
+            return
+
+        self.polygons.append({
+            "label": self.current_label,
+            "label_name": ["", "sr", "ir", "mr", "lr", "so", "io"][self.current_label],
+            "points": self.current_polygon.copy(),
+            "is_hole": False
+        })
+        self.current_polygon = []
+        self.update()
+
+        if self.parent_window:
+            self.parent_window.update_polygon_list()
+
+    def delete_selected_polygon(self):
+        """選択中のポリゴンを削除（外部から呼び出し用）"""
+        if self.selected_polygon_idx is not None:
+            del self.polygons[self.selected_polygon_idx]
+            self.selected_polygon_idx = None
+            self.update()
+
+    def clear_current_label(self):
+        """現在のラベルのポリゴンを全削除"""
+        self.polygons = [p for p in self.polygons if p["label"] != self.current_label]
+        self.selected_polygon_idx = None
+        self.update()
+        if self.parent_window:
+            self.parent_window.update_polygon_list()
+
 
 class NoScrollTabWidget(QTabWidget):
     """ホイールスクロールでタブが切り替わらないQTabWidget"""
@@ -555,6 +904,13 @@ class MuscleSegmentationGUI(QMainWindow):
         else:
             app_dir = Path(__file__).resolve().parent.parent
         self.result_manager = ResultManager(app_dir, model_id=self.predictor.task_id)
+
+        # 編集モード管理
+        self.is_editing = False
+        self.edit_canvas = None  # EditorCanvas instance
+        self.edit_slice_polygons = {}  # {slice_idx: [polygons]}
+        self.edit_original_pred_array = None  # 編集前のバックアップ
+        self.edit_current_slice = 0
 
         self.init_ui()
     
