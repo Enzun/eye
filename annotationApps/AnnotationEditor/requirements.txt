@@ -1,0 +1,5 @@
+PyQt5>=5.15
+numpy>=1.21
+SimpleITK>=2.1
+pydicom>=2.3
+opencv-python>=4.5

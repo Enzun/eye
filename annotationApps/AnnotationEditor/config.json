@@ -1,0 +1,25 @@
+{
+  "version": "1.0",
+  "model_id": 119,
+  "series_filter": "eT1W_SE_cor",
+  "shared_folder_path": "",
+  "auto_load_on_startup": false,
+  "prediction_filter": {
+    "min_area_px": 20,
+    "edge_margin_pct": 12,
+    "max_keep_per_label": 2,
+    "enable_count_filter": true
+  },
+  "comments": {
+    "model_id": "使用する nnUNet モデルの DatasetID（例: 119）",
+    "series_filter": "DICOM インポート時の対象シリーズ名（SeriesDescription 部分一致）。空なら全シリーズ",
+    "shared_folder_path": "共有フォルダのパス（例: \\\\192.168.0.81\\Export）。空なら自動取得を無効化",
+    "auto_load_on_startup": "起動時に共有フォルダを自動スキャンするか（true/false）",
+    "prediction_filter": {
+      "min_area_px": "この面積（ピクセル数）未満のコンポーネントを削除",
+      "edge_margin_pct": "画像端からこの割合（%）以内のコンポーネントを削除",
+      "max_keep_per_label": "1ラベルあたりの最大保持コンポーネント数（面積上位N個を残す）",
+      "enable_count_filter": "個数上限フィルタの有効/無効"
+    }
+  }
+}
