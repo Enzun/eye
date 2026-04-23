@@ -1,0 +1,8 @@
+# ローカル実行状態（コミット不要）
+session.json
+
+# 患者画像データ（NIfTI）
+app/images/
+
+# 出力データ（ルートの **/output/ でも除外済み）
+app/output/

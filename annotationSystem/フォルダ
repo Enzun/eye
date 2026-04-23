@@ -1,0 +1,60 @@
+  主PC ローカル（外部非公開）
+
+  C:\HospitalAnnotation\          ← ルートは任意の名前でよい
+    │
+    ├── python311\                 ← PyTorch + nnUNetv2 入りポータブルPython
+    │                                 (AdminApp.bat が ..\..\python311 を参照)
+    │
+    ├── 01_mainpc\
+    │   ├── AdminApp\
+    │   │   ├── AdminApp.bat       ← 起動ファイル
+    │   │   ├── AdminApp.py
+    │   │   ├── config.json
+    │   │   ├── core\
+    │   │   ├── ui\
+    │   │   └── utils\
+    │   ├── rawData_nifti\         ← 運用時にDICOM変換後データを置く（初期は空）
+    │   └── mapping\               ← 対応表CSV置き場（初期は空）
+    │
+    └── nnUNet_results\            ← 環境変数 nnUNet_results にこのパスを設定
+        └── Dataset119_EyeMuscleSegmentation\
+            └── nnUNetTrainer__nnUNetPlans__2d\
+                ├── dataset.json
+                ├── dataset_fingerprint.json
+                ├── plans.json
+                └── fold_0\
+                    └── checkpoint_best.pth   ← 推論で使用（checkpoint_latest等は不要）
+
+  環境変数の設定（主PCで必須）
+  nnUNet_results = C:\HospitalAnnotation\nnUNet_results
+
+  ---
+  共有フォルダ（作業者PCからアクセス）
+
+  \\192.168.0.81\
+    │
+    ├── python311\                 ← PyTorchなし軽量版ポータブルPython
+    │                                 (RunAnnotationEditor.bat が ..\python311 を参照)
+    │                                 ※ 02_shared の1つ上に置く必要がある
+    │
+    └── 02_shared\
+        ├── AnnotationEditor.exe   ← 起動ファイル（bat を呼ぶランチャー）
+        ├── RunAnnotationEditor.bat
+        ├── app_icon.ico
+        ├── config.json            ← workspace_root を UNCパスで設定
+        ├── labels.json
+        ├── assignments.json       ← AdminAppが生成・管理（初期は空）
+        ├── app\                   ← Pythonソース一式（batが app\gui\... を呼ぶ）
+        │   ├── gui\
+        │   ├── managers\
+        │   └── parsers\
+        ├── images\
+        │   ├── raw\               ← AdminAppが匿名化後に配置（初期は空）
+        │   └── pred\              ← AdminAppが推論後に配置（初期は空）
+        ├── corrected\             ← 作業者が書き込む（初期は空）
+        └── sessions\              ← グループ別セッションファイル（初期は空）
+
+  config.json の設定（workspace_root）
+  {
+    "workspace_root": "\\\\192.168.0.81\\02_shared"
+  }

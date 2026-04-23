@@ -1,0 +1,21 @@
+{
+  "version": "2.0",
+  "workspace_root": "",
+  "last_group_id": "grp001",
+  "prediction_filter": {
+    "min_area_px": 20,
+    "edge_margin_pct": 12,
+    "max_keep_per_label": 2,
+    "enable_count_filter": true
+  },
+  "comments": {
+    "workspace_root": "共有フォルダのパス。空なら自動検出（AnnotationEditor の親フォルダ = 02_shared/）。例: \\\\192.168.0.81\\shared",
+    "last_group_id": "最後に使ったグループID（自動保存）。次回起動時に初期選択される",
+    "prediction_filter": {
+      "min_area_px": "この面積（ピクセル数）未満のコンポーネントを削除",
+      "edge_margin_pct": "画像端からこの割合（%）以内のコンポーネントを削除",
+      "max_keep_per_label": "1ラベルあたりの最大保持コンポーネント数（面積上位N個を残す）",
+      "enable_count_filter": "個数上限フィルタの有効/無効"
+    }
+  }
+}

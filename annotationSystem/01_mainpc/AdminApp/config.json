@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "paths": {
+    "mri_folder_path": "\\\\192.168.0.81\\Export",
+    "raw_nifti_dir": "../rawData_nifti",
+    "predictions_dir": "../predictions",
+    "shared_dir": "../../annotation_workspace",
+    "mapping_csv": "../mapping/case_mapping.csv"
+  },
+  "settings": {
+    "series_filter": ["eT1W_SE_cor"],
+    "model_dataset_name": "EyeMuscleSegmentation",
+    "group_size": 15,
+    "case_prefix": "Case",
+    "case_digits": 3,
+    "model_id": 119
+  }
+}
