@@ -374,11 +374,21 @@ class EditorCanvas(QWidget):
                 self.selected_polygon_idx = self._find_polygon_at(ix, iy)
                 self.update()
             else:
-                # 描画モード: 点を追加
+                # 描画モード: 同ラベル既存領域クリックで選択モードに切り替え、そうでなければ点を追加
                 ix, iy = self.screen_to_image(event.x(), event.y())
                 if ix is not None:
-                    self.current_polygon.append([ix, iy])
-                    self.update()
+                    hit_idx = self._find_polygon_at(ix, iy)
+                    if (hit_idx is not None
+                            and self.polygons[hit_idx]["label"] == self.current_label):
+                        self.current_polygon = []
+                        self.current_label = 0
+                        self.selected_polygon_idx = hit_idx
+                        if self.parent_window is not None:
+                            self.parent_window.update_label_palette_selection(0)
+                        self.update()
+                    else:
+                        self.current_polygon.append([ix, iy])
+                        self.update()
 
         elif event.button() == Qt.RightButton:
             if self.current_label == 0 and self.selected_polygon_idx is not None:

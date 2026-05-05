@@ -13,8 +13,10 @@ workspace_root の決定:
 """
 
 import copy
+import csv
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -344,6 +346,8 @@ class AnnotationEditorApp(QMainWindow):
         self.is_saved     = True
         self.status_filter = None
 
+        self._case_mapping = self._load_case_mapping()
+
         self._ready = True
         self._init_ui()
 
@@ -644,6 +648,14 @@ class AnnotationEditorApp(QMainWindow):
 
         lo.addStretch()
 
+        self.case_info_label = QLabel("")
+        self.case_info_label.setStyleSheet(
+            "color: #cfd8dc; font-size: 13px; padding: 0 6px;"
+        )
+        lo.addWidget(self.case_info_label)
+
+        lo.addWidget(self._vsep())
+
         self.btn_undo = self._text_btn("↩ Undo", lambda: self.canvas.undo())
         self.btn_undo.setEnabled(False)
         lo.addWidget(self.btn_undo)
@@ -771,6 +783,45 @@ class AnnotationEditorApp(QMainWindow):
         """)
         btn.clicked.connect(lambda _c, lid=label_id: self._on_label_btn_clicked(lid))
         return btn
+
+    # ════════════════════════════════════════════════════════
+    # ケースマッピング（ID・撮影日表示）
+    # ════════════════════════════════════════════════════════
+
+    def _load_case_mapping(self) -> dict:
+        """workspace_root/case_mapping.csv を読み込み {case_id: exam_date} を返す。
+        ファイルがない場合は空辞書を返す。"""
+        mapping = {}
+        csv_path = self.workspace_root / "case_mapping.csv"
+        if not csv_path.exists():
+            return mapping
+        try:
+            with open(csv_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    case_id = row.get("case_id", "").strip()
+                    orig    = row.get("original_filename", "").strip()
+                    if not case_id:
+                        continue
+                    # original_filename 例: 222222_20240508_112048_EX1_SE3
+                    m = re.search(r"_(\d{8})_", orig)
+                    if m:
+                        d = m.group(1)
+                        exam_date = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+                    else:
+                        exam_date = ""
+                    mapping[case_id] = exam_date
+        except Exception as e:
+            print(f"[CaseMapping] 読み込み失敗: {e}")
+        return mapping
+
+    def _update_case_info_label(self, case_id: str):
+        """トップバーのケース情報ラベルを更新する"""
+        exam_date = self._case_mapping.get(case_id, "")
+        if exam_date:
+            self.case_info_label.setText(f"{case_id}  |  {exam_date}")
+        else:
+            self.case_info_label.setText(case_id)
 
     # ════════════════════════════════════════════════════════
     # 設定保存ヘルパー
@@ -908,6 +959,7 @@ class AnnotationEditorApp(QMainWindow):
             return
 
         self.workspace_root = workspace_root
+        self._case_mapping = self._load_case_mapping()
         self.group_id   = selected_group_id
         self.group_name = group_info.get("group_name", selected_group_id)
         self.case_start = group_info.get("case_start", "")
@@ -932,6 +984,7 @@ class AnnotationEditorApp(QMainWindow):
         self.btn_save.setEnabled(False)
         self.btn_complete.setEnabled(False)
         self.status_label.setText("")
+        self.case_info_label.setText("")
 
         # グループ情報ラベル更新
         self.grp_id_label.setText(
@@ -1106,6 +1159,7 @@ class AnnotationEditorApp(QMainWindow):
         self.setWindowTitle(
             f"AnnotationEditor Lite — {self.group_id} — {case_id}"
         )
+        self._update_case_info_label(case_id)
 
         # 予測なしの場合に注記
         if not pred_rel or not (self.workspace_root / pred_rel).exists():
