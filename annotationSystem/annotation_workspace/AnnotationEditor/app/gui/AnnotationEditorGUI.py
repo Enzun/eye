@@ -361,7 +361,8 @@ class AnnotationEditorApp(QMainWindow):
         self.setWindowTitle(
             f"AnnotationEditor Lite — {self.group_id}  ({self.group_name})"
         )
-        self.setGeometry(50, 50, 1750, 1020)
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.setGeometry(screen.x(), screen.y(), screen.width(), screen.height())
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -611,16 +612,6 @@ class AnnotationEditorApp(QMainWindow):
 
         lo.addWidget(self._vsep())
 
-        btn_cp_prev = self._text_btn("← コピー", self._copy_from_prev)
-        btn_cp_prev.setToolTip("前スライスのポリゴンをコピー (Ctrl+Left)")
-        lo.addWidget(btn_cp_prev)
-
-        btn_cp_next = self._text_btn("コピー →", self._copy_from_next)
-        btn_cp_next.setToolTip("次スライスのポリゴンをコピー (Ctrl+Right)")
-        lo.addWidget(btn_cp_next)
-
-        lo.addWidget(self._vsep())
-
         self.btn_mask_toggle = QPushButton("マスク: ON")
         self.btn_mask_toggle.setCheckable(True)
         self.btn_mask_toggle.setChecked(True)
@@ -789,7 +780,7 @@ class AnnotationEditorApp(QMainWindow):
     # ════════════════════════════════════════════════════════
 
     def _load_case_mapping(self) -> dict:
-        """workspace_root/case_mapping.csv を読み込み {case_id: exam_date} を返す。
+        """workspace_root/case_mapping.csv を読み込み {case_id: (patient_id, exam_date)} を返す。
         ファイルがない場合は空辞書を返す。"""
         mapping = {}
         csv_path = self.workspace_root / "case_mapping.csv"
@@ -799,8 +790,9 @@ class AnnotationEditorApp(QMainWindow):
             with open(csv_path, newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
-                    case_id = row.get("case_id", "").strip()
-                    orig    = row.get("original_filename", "").strip()
+                    case_id    = row.get("case_id", "").strip()
+                    orig       = row.get("original_filename", "").strip()
+                    patient_id = row.get("patient_id", "").strip()
                     if not case_id:
                         continue
                     # original_filename 例: 222222_20240508_112048_EX1_SE3
@@ -810,16 +802,22 @@ class AnnotationEditorApp(QMainWindow):
                         exam_date = f"{d[:4]}-{d[4:6]}-{d[6:]}"
                     else:
                         exam_date = ""
-                    mapping[case_id] = exam_date
+                    mapping[case_id] = (patient_id, exam_date)
         except Exception as e:
             print(f"[CaseMapping] 読み込み失敗: {e}")
         return mapping
 
     def _update_case_info_label(self, case_id: str):
         """トップバーのケース情報ラベルを更新する"""
-        exam_date = self._case_mapping.get(case_id, "")
-        if exam_date:
-            self.case_info_label.setText(f"{case_id}  |  {exam_date}")
+        info = self._case_mapping.get(case_id)
+        if info:
+            patient_id, exam_date = info
+            parts = [case_id]
+            if patient_id:
+                parts.append(patient_id)
+            if exam_date:
+                parts.append(exam_date)
+            self.case_info_label.setText("  |  ".join(parts))
         else:
             self.case_info_label.setText(case_id)
 
@@ -1252,37 +1250,6 @@ class AnnotationEditorApp(QMainWindow):
             self.current_slice_polygons[self.current_slice_idx] = self.canvas.get_polygons()
             self._display_slice(new_idx)
 
-    def _copy_from_prev(self):
-        self._copy_from_adjacent(-1)
-
-    def _copy_from_next(self):
-        self._copy_from_adjacent(1)
-
-    def _copy_from_adjacent(self, direction):
-        if self.current_image_array is None:
-            return
-        src_idx = self.current_slice_idx + direction
-        if src_idx < 0 or src_idx >= self.current_num_slices:
-            return
-        self.current_slice_polygons[self.current_slice_idx] = self.canvas.get_polygons()
-        src_polys = self.current_slice_polygons.get(src_idx, [])
-        if not src_polys:
-            QMessageBox.information(
-                self, "コピー元なし",
-                f"スライス {src_idx + 1} にポリゴンがありません。"
-            )
-            return
-        label = "前" if direction == -1 else "次"
-        reply = QMessageBox.question(
-            self, "コピー確認",
-            f"スライス {src_idx + 1}（{label}）のポリゴン {len(src_polys)} 個をコピーしますか？",
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply == QMessageBox.Yes:
-            self.canvas._push_undo()
-            self.canvas.polygons = copy.deepcopy(src_polys)
-            self.canvas.update()
-
     def _reset_current_slice(self):
         if not self.current_case_id:
             return
@@ -1459,11 +1426,7 @@ class AnnotationEditorApp(QMainWindow):
     def keyPressEvent(self, event):
         key  = event.key()
         mods = event.modifiers()
-        if key == Qt.Key_Left and mods == Qt.ControlModifier:
-            self._copy_from_prev()
-        elif key == Qt.Key_Right and mods == Qt.ControlModifier:
-            self._copy_from_next()
-        elif key == Qt.Key_Left:
+        if key == Qt.Key_Left:
             self._prev_slice()
         elif key == Qt.Key_Right:
             self._next_slice()
@@ -1540,7 +1503,7 @@ class AnnotationEditorApp(QMainWindow):
 
 <h3>右パネルの構成</h3>
 <ul>
-  <li><b>トップバー</b>: スライス移動 / WC・WW スライダー / 隣接コピー / Undo・Redo</li>
+  <li><b>トップバー</b>: スライス移動 / WC・WW スライダー / Undo・Redo</li>
   <li><b>キャンバス</b>: 画像表示・ポリゴン編集エリア</li>
   <li><b>ラベルパレット</b>: ラベルの選択ボタン（最下部）</li>
 </ul>
