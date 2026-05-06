@@ -339,6 +339,30 @@ class EditorCanvas(QWidget):
                 best_idx, best_d = i, d
         return best_idx
 
+    def _find_nearest_edge(self, screen_pos):
+        """選択中ポリゴンの最近傍の辺インデックスを返す（頂点iとi+1の間の辺）。
+        辺から一定距離以内でなければ None を返す。"""
+        if self.selected_polygon_idx is None:
+            return None
+        pts = self.polygons[self.selected_polygon_idx]["points"]
+        HIT = 12
+        best_idx, best_d = None, float("inf")
+        n = len(pts)
+        for i in range(n):
+            ax, ay = self.image_to_screen(*pts[i])
+            bx, by = self.image_to_screen(*pts[(i + 1) % n])
+            # 点からの垂線距離
+            dx, dy = bx - ax, by - ay
+            seg_len2 = dx * dx + dy * dy
+            if seg_len2 == 0:
+                continue
+            t = max(0.0, min(1.0, ((screen_pos.x() - ax) * dx + (screen_pos.y() - ay) * dy) / seg_len2))
+            cx, cy = ax + t * dx, ay + t * dy
+            d = ((screen_pos.x() - cx) ** 2 + (screen_pos.y() - cy) ** 2) ** 0.5
+            if d < HIT and d < best_d:
+                best_idx, best_d = i, d
+        return best_idx
+
     def _find_polygon_at(self, ix, iy):
         if ix is None:
             return None
@@ -392,9 +416,14 @@ class EditorCanvas(QWidget):
 
         elif event.button() == Qt.RightButton:
             if self.current_label == 0 and self.selected_polygon_idx is not None:
-                # 選択ツール: 透明度切り替え
-                self.polygon_opacity_mode = (self.polygon_opacity_mode + 1) % 3
-                self.update()
+                # 選択ツール: 頂点付近なら頂点削除
+                v = self._find_nearest_vertex(event.pos())
+                if v is not None:
+                    pts = self.polygons[self.selected_polygon_idx]["points"]
+                    if len(pts) > 3:
+                        self._push_undo()
+                        pts.pop(v)
+                        self.update()
             elif self.current_label > 0 and len(self.current_polygon) >= 3:
                 # 描画モード: ポリゴン完成
                 self._finish_polygon()
@@ -442,8 +471,19 @@ class EditorCanvas(QWidget):
             self.setCursor(Qt.ArrowCursor)
 
     def mouseDoubleClickEvent(self, event):
-        """ダブルクリック: 描画中のポリゴンを完成させる"""
-        if self.current_label > 0 and len(self.current_polygon) >= 3:
+        if self.current_label == 0 and self.selected_polygon_idx is not None:
+            # 選択ツール: 最近傍の辺に頂点を挿入
+            ix, iy = self.screen_to_image(event.x(), event.y())
+            if ix is not None:
+                insert_idx = self._find_nearest_edge(event.pos())
+                if insert_idx is not None:
+                    self._push_undo()
+                    self.polygons[self.selected_polygon_idx]["points"].insert(
+                        insert_idx + 1, [ix, iy]
+                    )
+                    self.update()
+        elif self.current_label > 0 and len(self.current_polygon) >= 3:
+            # 描画モード: ポリゴンを完成させる
             self._finish_polygon()
 
     # ── キーボード ────────────────────────────────────────

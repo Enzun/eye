@@ -624,6 +624,16 @@ class AnnotationEditorApp(QMainWindow):
         self.btn_mask_toggle.clicked.connect(self._on_mask_toggle)
         lo.addWidget(self.btn_mask_toggle)
 
+        self._opacity_labels = ["表示: 通常", "表示: 薄め", "表示: 輪郭"]
+        self.btn_opacity = QPushButton(self._opacity_labels[0])
+        self.btn_opacity.setFixedHeight(32)
+        self.btn_opacity.setStyleSheet(
+            "color: white; background: #546e7a; border: none;"
+            " border-radius: 4px; padding: 0 10px; font-size: 13px;"
+        )
+        self.btn_opacity.clicked.connect(self._on_opacity_toggle)
+        lo.addWidget(self.btn_opacity)
+
         btn_reset = self._text_btn("リセット", self._reset_current_slice, color="#ffab40")
         btn_reset.setToolTip("現在スライスを AI 予測に戻す")
         lo.addWidget(btn_reset)
@@ -1291,6 +1301,12 @@ class AnnotationEditorApp(QMainWindow):
         self.btn_mask_toggle.setText(
             "マスク: ON" if self.canvas.mask_visible else "マスク: OFF"
         )
+        self.canvas.update()
+
+    def _on_opacity_toggle(self):
+        mode = (self.canvas.polygon_opacity_mode + 1) % 3
+        self.canvas.polygon_opacity_mode = mode
+        self.btn_opacity.setText(self._opacity_labels[mode])
         self.canvas.update()
 
     def _on_label_btn_clicked(self, label_id):
