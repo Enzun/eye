@@ -126,7 +126,7 @@ def mask_to_polygons(slice_mask, max_label=11):
             if len(contour) < 3:
                 continue
             # ε=2.0 ピクセルで輪郭を間引く（眼筋サイズで概ね 20〜40 点程度になる）
-            approx = cv2.approxPolyDP(contour, epsilon=1.0, closed=True)
+            approx = cv2.approxPolyDP(contour, epsilon=0.5, closed=True)
             if len(approx) < 3:
                 continue
             pts = approx.squeeze().tolist()
