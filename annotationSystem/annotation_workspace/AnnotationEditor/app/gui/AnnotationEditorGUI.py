@@ -362,7 +362,7 @@ class AnnotationEditorApp(QMainWindow):
             f"AnnotationEditor Lite — {self.group_id}  ({self.group_name})"
         )
         screen = QApplication.primaryScreen().availableGeometry()
-        self.setGeometry(screen.x(), screen.y(), screen.width(), screen.height())
+        self.setGeometry(screen.x(), screen.y(), 1750, 1020)
 
         central = QWidget()
         self.setCentralWidget(central)
