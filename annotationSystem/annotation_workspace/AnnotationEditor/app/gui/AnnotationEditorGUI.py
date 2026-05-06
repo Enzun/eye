@@ -1519,7 +1519,7 @@ class AnnotationEditorApp(QMainWindow):
 
 <h3>右パネルの構成</h3>
 <ul>
-  <li><b>トップバー</b>: スライス移動 / WC・WW スライダー / Undo・Redo</li>
+  <li><b>トップバー</b>: スライス移動 / WC・WW スライダー / マスクON・OFF / 表示切替 / Undo・Redo / ケース情報（ID・患者ID・撮影日）</li>
   <li><b>キャンバス</b>: 画像表示・ポリゴン編集エリア</li>
   <li><b>ラベルパレット</b>: ラベルの選択ボタン（最下部）</li>
 </ul>
@@ -1547,14 +1547,24 @@ class AnnotationEditorApp(QMainWindow):
   <li><b>右クリック</b> でポリゴン確定（3点以上必要）</li>
   <li><b>Esc キー</b> で描画キャンセル</li>
 </ol>
+<p>💡 選択中のラベルと同じラベルの既存領域を左クリックすると、自動的に選択ツールに切り替わります。</p>
 
 <h3>ポリゴンの編集（選択ツール: 0）</h3>
-<ol>
-  <li><b>左クリック</b> でポリゴンを選択 → 白い頂点が表示される</li>
-  <li>頂点を <b>ドラッグ</b> して位置を調整</li>
-  <li><b>Delete キー</b> で選択中のポリゴンを削除</li>
-  <li><b>右クリック</b> でマスクの透明度を切り替え</li>
-</ol>
+<table width="100%">
+  <tr><th>操作</th><th>動作</th></tr>
+  <tr><td><b>左クリック</b>（領域内）</td><td>ポリゴンを選択 → 白い頂点が表示される</td></tr>
+  <tr><td><b>頂点をドラッグ</b></td><td>頂点の位置を移動</td></tr>
+  <tr><td><b>右クリック</b>（頂点付近）</td><td>その頂点を削除（最低3点は維持）</td></tr>
+  <tr><td><b>ダブルクリック</b>（辺の上）</td><td>その辺に新しい頂点を挿入</td></tr>
+  <tr><td><b>Delete キー</b></td><td>選択中のポリゴンをまるごと削除</td></tr>
+</table>
+
+<h3>表示の切り替え</h3>
+<table width="100%">
+  <tr><th>操作</th><th>動作</th></tr>
+  <tr><td>トップバー <b>マスク: ON/OFF</b></td><td>全マスクの表示 / 非表示を切り替え</td></tr>
+  <tr><td>トップバー <b>表示: 通常 / 薄め / 輪郭</b></td><td>マスクの透明度をグローバルに切り替え</td></tr>
+</table>
 
 <h3>保存・完了</h3>
 <ul>
@@ -1615,6 +1625,7 @@ class AnnotationEditorApp(QMainWindow):
 <pre style="background:#f5f5f5;padding:8px;border-radius:4px;font-size:11px;">
 annotation_workspace/
   assignments.json         グループ定義
+  case_mapping.csv         ケースID・患者ID・撮影日マッピング（トップバー表示用）
   sessions/
     grp001.json            グループ 1 のセッション
     grp002.json            グループ 2 のセッション

@@ -11,6 +11,8 @@
 ├── config.json              ← 共通設定（workspace_rootなど）
 ├── labels.json              ← ラベル定義（共通）
 ├── assignments.json         ← グループ定義（主PCが管理・作業者は読み取り専用）
+├── case_mapping.csv         ← ケースID・患者ID・撮影日マッピング（アプリ上部に表示）
+│                               列: case_id, original_filename, patient_id, exam_id, series_id, convert_date
 │
 ├── images/                  ← 匿名化済みNIfTI画像（全員が読み取り専用）
 │   ├── raw/                 # 生データ（*_0000.nii.gz）
@@ -34,6 +36,7 @@
 |:---|:---|:---|
 | `images/` | **読み取り専用** | 生データおよび推論結果を誤って変更・削除させないため。 |
 | `*.json` 設定ファイル一式 | **読み取り専用** | `config.json`, `labels.json`, `assignments.json` など、設定の不用意な変更を防ぐため。 |
+| `case_mapping.csv` | **読み取り専用** | アプリのトップバーにケース情報を表示するために使用。主PCが配布時に配置する。 |
 | `corrected/` | **変更（読み書き更新）** | 各作業者がアノテーション修正後の NIfTI ファイルを保存するために必須。 |
 | `sessions/` | **変更（読み書き更新）** | アプリが現在の作業進捗（セッション情報）を保存するために必須。 |
 
